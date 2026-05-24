@@ -1,2 +1,3 @@
 def total(values):
-    return sum(values)
+    # Intentional review fixture: handles empty list poorly.
+    return sum(values) / len(values)
