@@ -15,9 +15,32 @@ triggers:
   - "market briefing"
   - "cited report"
   - "查一下并写报告"
+  - "查一下并写"
+  - "决策 memo"
+  - "决策备忘"
+  - "来源、关键发现"
 provenance:
   origin: opensquilla-original
   license: Apache-2.0
+metadata:
+  opensquilla:
+    risk: low
+    capabilities: [network, filesystem-write]
+    clawhub_top100_composition:
+      - skill: "Multi Search Engine"
+        local_skill: multi-search-engine
+        rank_source: "Top ClawHub Skills downloads top100, 2026-05-28"
+        rank: 11
+        role: "Gather current multi-engine sources before drafting."
+      - skill: "Deep Researcher / deep research family"
+        local_skill: deep-research
+        rank_source: "ClawHub research-skill family, verified via current search results"
+        role: "Run deeper source-backed research for long reports."
+      - skill: "Word / DOCX"
+        local_skill: docx
+        rank_source: "Top ClawHub Skills downloads top100, 2026-05-28"
+        rank: 28
+        role: "Export polished report artifacts when requested."
 composition:
   steps:
     - id: preferences
@@ -27,7 +50,11 @@ composition:
         task: |
           Infer the report contract from the request. If details are missing,
           choose conservative defaults and mark them as assumptions instead of
-          asking follow-up questions.
+          asking follow-up questions. Set NEEDS_CLARIFICATION: yes only when the topic is too broad
+          to search usefully, or when the user asks for a decision-support
+          report but the audience or decision context is missing. Do not ask
+          for citation style, length, or language when a conservative default
+          works.
 
           User request:
           {{ inputs.user_message | xml_escape | truncate(1200) }}
@@ -39,11 +66,46 @@ composition:
           TARGET_LENGTH: <short|standard|long>
           LANGUAGE: <language>
           CITATION_STYLE: <inline links|footnotes|bibliography>
+          NEEDS_CLARIFICATION: <yes|no>
+          MISSING_FIELDS:
+            - <topic|audience|decision_context|none>
+          CLARIFY_REASON: <one concise reason, or none>
           ASSUMPTIONS:
             - <assumption>
+    - id: report_clarify
+      kind: user_input
+      depends_on: [preferences]
+      when: "'NEEDS_CLARIFICATION: yes' in outputs.preferences"
+      clarify:
+        mode: form
+        intro: |
+          报告主题或决策场景还不够明确。请补齐最小信息，我再继续检索和写作。
+        nl_extract: true
+        fields:
+          - name: topic
+            type: string
+            required: true
+            prompt: "报告主题 / Report topic"
+            max_chars: 240
+          - name: audience
+            type: string
+            required: true
+            prompt: "读者或受众 / Audience"
+            max_chars: 160
+          - name: decision_context
+            type: string
+            required: true
+            prompt: "要支持的决策或使用场景 / Decision context"
+            max_chars: 300
+          - name: source_preferences
+            type: string
+            prompt: "偏好的来源或范围 / Preferred sources or scope"
+            max_chars: 300
+        cancel_keywords: ["算了", "取消", "cancel", "stop", "abort"]
+        timeout_hours: 24
     - id: report_mode
       kind: llm_classify
-      depends_on: [preferences]
+      depends_on: [preferences, report_clarify]
       output_choices:
         - QUICK_DECISION_MEMO
         - DEEP_REPORT
@@ -57,6 +119,9 @@ composition:
 
           Preferences:
           {{ outputs.preferences | truncate(1200) }}
+
+          Clarification answers (may be empty when not needed):
+          {{ inputs.get('collected', {}).get('report_clarify', {}) | tojson }}
 
           Decision rules:
           - QUICK_DECISION_MEMO: user wants a concise answer, quick brief,
@@ -72,9 +137,9 @@ composition:
     - id: search
       kind: skill_exec
       skill: multi-search-engine
-      depends_on: [preferences, report_mode]
+      depends_on: [preferences, report_clarify, report_mode]
       with:
-        query: "{{ outputs.preferences | truncate(180) }}"
+        query: "{{ outputs.preferences | truncate(180) }} {{ inputs.get('collected', {}).get('report_clarify', {}) | tojson | truncate(180) }}"
         engines: [brave, tavily, duckduckgo]
         max_results: 20
     - id: source_quality
@@ -266,6 +331,10 @@ composition:
             decision memos when stronger sources exist.
           - If sources are weak or stale, say so in Limitations instead of
             overstating certainty.
+          - Do not announce that a file was generated unless the user explicitly
+            asked for DOCX/file export and the export step ran. For ordinary
+            memo requests, the final chat reply must contain the complete memo
+            body inline.
     - id: export
       skill: docx
       depends_on: [final_report]

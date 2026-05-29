@@ -30,14 +30,63 @@ composition:
           ROUTE: normal-skill. If it requires orchestrating multiple existing
           skills, return ROUTE: meta-skill. Also summarize desired inputs,
           outputs, trigger phrases, and whether a human preference branch is
-          needed.
+          needed. Set NEEDS_CLARIFICATION: yes only when the workflow goal,
+          output shape, trigger boundary, or human preference branch is
+          genuinely ambiguous and the request is an interactive user request.
+          For unattended auto-propose, dream, or cron activation, set
+          NEEDS_CLARIFICATION: no and continue from available context.
 
           User request:
           {{ inputs.user_message | xml_escape | truncate(1200) }}
 
+          Outer system / activation context:
+          {{ inputs.system_prompt | default("") | xml_escape | truncate(1200) }}
+
+          Return:
+          ROUTE: <normal-skill|meta-skill>
+          WORKFLOW_GOAL: <goal or unclear>
+          OUTPUT_SHAPE: <deliverable or unclear>
+          TRIGGERS: <phrases or unclear>
+          HUMAN_PREFERENCE_BRANCH: <yes|no|unclear>
+          NEEDS_CLARIFICATION: <yes|no>
+          MISSING_FIELDS:
+            - <workflow_goal|output_shape|trigger_boundary|human_preference_branch|none>
+          CLARIFY_REASON: <one concise reason, or none>
+
+    - id: creator_clarify
+      kind: user_input
+      depends_on: [clarify_intent]
+      when: "'NEEDS_CLARIFICATION: yes' in outputs.clarify_intent"
+      clarify:
+        mode: form
+        intro: |
+          新 meta-skill 的边界还不够明确。请补齐目标和输出形态，避免生成过宽的触发词。
+        nl_extract: true
+        fields:
+          - name: workflow_goal
+            type: string
+            required: true
+            prompt: "工作流目标 / Workflow goal"
+            max_chars: 300
+          - name: output_shape
+            type: string
+            required: true
+            prompt: "最终输出形态 / Output shape"
+            max_chars: 200
+          - name: trigger_boundary
+            type: string
+            prompt: "触发边界或不要覆盖的场景 / Trigger boundary"
+            max_chars: 300
+          - name: human_preference_branch
+            type: bool
+            default: false
+            prompt: "是否需要运行中让用户选择偏好 / Need human preference branch?"
+        cancel_keywords: ["算了", "取消", "cancel", "stop", "abort"]
+        timeout_hours: 24
+
     - id: creator_mode
       kind: llm_classify
-      depends_on: [clarify_intent]
+      depends_on: [clarify_intent, creator_clarify]
       output_choices:
         - PREVIEW_ONLY
         - PERSISTED_PROPOSAL
@@ -55,6 +104,9 @@ composition:
           Clarified intent:
           {{ outputs.clarify_intent | truncate(1200) }}
 
+          Clarification answers (may be empty when not needed):
+          {{ inputs.get('collected', {}).get('creator_clarify', {}) | tojson }}
+
           Decision rules:
           - PREVIEW_ONLY: user asks for an example, template, plan, draft,
             or wants to inspect before writing/persisting anything.
@@ -69,11 +121,13 @@ composition:
     - id: harvest
       kind: skill_exec
       skill: history-explorer
-      depends_on: [clarify_intent]
+      depends_on: [clarify_intent, creator_clarify]
       on_failure: harvest_empty
       with:
         query: |
           Co-occurring skill chains and meta-skill usage for: {{ outputs.clarify_intent | truncate(1000) }}
+          Clarification answers:
+          {{ inputs.get('collected', {}).get('creator_clarify', {}) | tojson }}
         window_days: 30
         include: [co_occurrences, meta_usage, router_fixtures]
 

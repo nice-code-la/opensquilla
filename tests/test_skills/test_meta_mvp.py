@@ -202,6 +202,56 @@ async def test_meta_resolution_matches_trigger() -> None:
 
 
 @pytest.mark.asyncio
+async def test_meta_resolution_semantic_fallback_matches_without_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+    meta_resolution_module = importlib.import_module(
+        "opensquilla.engine.steps.meta_resolution",
+    )
+
+    spec = _make_meta_spec(
+        name="meta-pdf-intelligence",
+        composition={"steps": [{"id": "a", "skill": "summarize"}]},
+        triggers=["PDF analysis"],
+        priority=55,
+    )
+    loader = _FakeLoader([spec])
+
+    class FakeRetriever:
+        def __init__(self, **kwargs: Any) -> None:
+            assert kwargs["strategy"] == "hybrid"
+
+        def retrieve(self, skills: list[SkillSpec], query: str, top_k: int = 1) -> list[SkillSpec]:
+            assert query == "帮我看一下这个文档，重点讲结论和风险"
+            assert top_k == 1
+            return [skills[0]]
+
+    monkeypatch.setattr(meta_resolution_module, "HybridRetriever", FakeRetriever)
+
+    ctx = SimpleNamespace(
+        message="帮我看一下这个文档，重点讲结论和风险",
+        semantic_message="帮我看一下这个文档，重点讲结论和风险",
+        session_key="semantic-session",
+        metadata={"skill_loader": loader},
+        system_prompt=("base prompt", ""),
+        config=SimpleNamespace(skills=SimpleNamespace(filter_strategy="lexical")),
+    )
+
+    out = await meta_resolution(ctx)  # type: ignore[arg-type]
+
+    assert out.metadata["meta_match"].plan.name == "meta-pdf-intelligence"
+    assert out.metadata["meta_match_source"] == "semantic"
+    assert out.metadata["meta_match_trigger"] == "semantic"
+    assert out.metadata["meta_activation_mode"] == "hint"
+    hint = str(out.system_prompt)
+    assert "Activation mode: hint" in hint
+    assert 'meta_invoke(name="meta-pdf-intelligence")' in hint
+    assert "Do not answer directly" in hint
+    assert "Do not call ordinary tools before `meta_invoke`" in hint
+
+
+@pytest.mark.asyncio
 async def test_meta_resolution_soft_hint_directs_meta_invoke_not_skill_view() -> None:
     spec = _make_meta_spec(
         composition={"steps": [{"id": "a", "skill": "summarize"}]},
@@ -219,6 +269,8 @@ async def test_meta_resolution_soft_hint_directs_meta_invoke_not_skill_view() ->
     out = await meta_resolution(ctx)  # type: ignore[arg-type]
 
     hint = out.system_prompt[1]
+    assert out.metadata["meta_activation_mode"] == "recommend"
+    assert "Activation mode: recommend" in hint
     assert 'call `meta_invoke(name="meta-x")`' in hint
     assert "Do not call `skill_view` for this meta-skill" in hint
 
@@ -573,6 +625,7 @@ def test_bundled_sample_loads(tmp_path: Path) -> None:
     assert plan is not None
     assert [s.id for s in plan.steps] == [
         "preferences",
+        "report_clarify",
         "report_mode",
         "search",
         "source_quality",
@@ -2425,20 +2478,22 @@ def test_bundled_migration_assistant_has_routes() -> None:
     plan = parse_meta_plan(skill)
     assert plan is not None
     assert [s.id for s in plan.steps] == [
+        "migration_intake",
+        "migration_clarify",
         "classify",
         "fetch_guide",
         "repo_context",
         "write_plan",
     ]
-    classify = plan.steps[0]
+    classify = plan.steps[2]
     assert classify.kind == "llm_classify"
     assert "OPENAI_V0_TO_V1" in classify.output_choices
-    fetch = plan.steps[1]
+    fetch = plan.steps[3]
     routes_to = {case.to for case in fetch.route}
     assert routes_to == {"github", "multi-search-engine"}
     # Default fallthrough must be deep-research (for OTHER verdict)
     assert fetch.skill == "deep-research"
-    repo_context = plan.steps[2]
+    repo_context = plan.steps[4]
     assert repo_context.skill == "git-diff"
     assert "current diff" in repo_context.when
     assert "current branch" in repo_context.when
