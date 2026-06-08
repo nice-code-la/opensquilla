@@ -56,6 +56,8 @@ requirements, and hub/tap distribution metadata.
 - Do not auto-install user-visible skills from raw conversation history.
 - Do not enable arbitrary shell-based dynamic context injection by default.
 - Do not merge all ordinary skills and MetaSkills into one internal type.
+- Do not add learned trigger models, analytics dashboards, cross-tenant sharing,
+  or concurrent patch merge UX in P0 or P1.
 
 ## Architecture
 
@@ -112,6 +114,20 @@ Each candidate should carry or derive:
 - negative activation prompts;
 - activation accuracy summary with variance across prompt variants.
 
+Negative prompts must be partly catalog-derived from adjacent installed skills,
+not only author-written or candidate-derived. Otherwise activation quality becomes
+a vanity score that misses real trigger collision. P0 should scope adjacent skills
+through the cheapest available neighborhood signal first, such as trigger text,
+topic tags, or embedding buckets if already available.
+
+Activation scoring should include a determinism contract:
+
+- true-positive rate and false-positive rate over fixed positive/negative sets;
+- repeated samples per prompt;
+- mean and variance recorded in the proposal gate result;
+- hard thresholds that fail eligibility when exceeded;
+- an eval budget per proposal so creation cost stays reviewable.
+
 This pass is separate from runtime logic E2E. A candidate can have correct DAG
 logic and still be unsafe if its description or triggers misroute user intent.
 Description optimization should iterate only the activation surface. Logic
@@ -162,6 +178,9 @@ Bundles should provide:
 Bundles serve the Hermes-style use case: "load these skills together because
 this domain frequently needs them." They are not substitutes for MetaSkills
 that need branching, validation gates, run history, or composed outputs.
+Bundle validation should reject prompt prefixes that smuggle execution ordering
+or step dependencies. If ordering matters, the bundle should be converted into a
+MetaSkill draft.
 
 ### Layer 5: Conditional Visibility
 
@@ -207,6 +226,12 @@ Creator output should be evaluated through explicit prompts and contracts:
 - trigger-collision audits rerun when any new skill or MetaSkill lands, because
   a later proposal can poach intent from an older one.
 
+No-workflow baseline comparison must include misroute prompts, not only intended
+positive prompts. A candidate that improves intended prompts but steals adjacent
+intent should remain ineligible. Drift and collision audits should use scoped
+neighborhoods and explicit budgets, because full catalog re-audit is quadratic as
+the catalog grows.
+
 This borrows Claude's create/eval/improve/benchmark lifecycle while keeping
 OpenSquilla's proposal gates.
 
@@ -216,11 +241,13 @@ Successful trajectories and user corrections should feed future proposal drafts
 without automatically installing anything.
 
 - Repeated successful ad-hoc trajectories become draft seeds after a frequency
-  threshold.
+  threshold and outcome-quality signal.
 - User corrections become local guardrails for the affected proposal and can be
   suggested for sibling bundles or related MetaSkills.
 - Correction propagation stays reviewable: it creates patch suggestions or
   benchmark cases, not direct edits to installed skills.
+- Memory-derived drafts should be rate-limited so repeated low-quality behavior
+  does not flood the proposal queue.
 - A future router MetaSkill may become useful once the retained catalog grows
   enough that retrieval and trigger collision become the bottleneck.
 
@@ -229,13 +256,17 @@ without automatically installing anything.
 ### Conversation or Run to Proposal
 
 1. User clicks or asks "turn this run into a MetaSkill draft."
-2. Draft seed helper summarizes the observed workflow.
-3. `meta-skill-creator` receives the seed as structured intent.
-4. Existing slot filling and assembly produce a candidate.
-5. Activation eval checks positive and negative trigger behavior.
-6. Existing gates run according to creator mode.
-7. User reviews preview or pending proposal.
-8. Accept flow promotes only eligible proposals unless force is explicit.
+2. Draft seed helper summarizes the observed workflow or refuses with a concrete
+   reason when the trace lacks a coherent single intent.
+3. Duplicate detection checks whether the seed should patch an existing proposal
+   instead of creating a sibling.
+4. `meta-skill-creator` receives the seed as structured intent.
+5. Existing slot filling and assembly produce a candidate.
+6. Activation eval checks positive, negative, and catalog-adjacent trigger
+   behavior.
+7. Existing gates run according to creator mode.
+8. User reviews preview or pending proposal.
+9. Accept flow promotes only eligible proposals unless force is explicit.
 
 ### Proposal Patch
 
@@ -264,7 +295,14 @@ without automatically installing anything.
 - If benchmark prompts are missing, generate only a preview and mark benchmark
   unavailable.
 - If activation prompts are missing, derive a minimal positive/negative set from
-  `trigger_when`, `skip_when`, and candidate triggers before persistence.
+  `trigger_when`, `skip_when`, candidate triggers, and catalog-adjacent skills
+  before persistence.
+- If a run summary contains file content, secrets, or personal data, paraphrase
+  trigger examples and omit literal content from the draft.
+- If duplicate detection finds a strong trigger overlap, recommend patching the
+  existing proposal instead of creating a new sibling.
+- If two reviewers try to patch the same pending proposal, take a sequential lock
+  and surface the conflict rather than merging automatically.
 - If runtime E2E context is unavailable, persist only as an ineligible proposal
   with the failure reason preserved.
 - If a bundle attempts to express step dependencies, recommend conversion to a
@@ -280,13 +318,18 @@ without automatically installing anything.
    variance cases for generated descriptions and triggers.
 4. Creator DAG tests verify seed payloads reach slot filling without losing raw
    user constraints.
-5. Proposal patch tests verify revisions preserve lineage and rerun gates.
-6. Bundle tests verify model-visible summaries and CLI/WebUI listing behavior.
-7. Conditional visibility tests cover satisfied, missing, and fallback cases.
-8. Benchmark tests compare two proposal revisions over fixed eval prompts.
-9. Drift tests rerun activation/collision checks after adding a sibling skill.
-10. Rollback tests disable a promoted revision and restore previous behavior.
-11. Regression tests ensure existing `PREVIEW_ONLY`, `PERSISTED_PROPOSAL`, and
+5. Draft refusal tests return `cannot draft` for incoherent or multi-intent
+   traces.
+6. Duplicate-detection tests redirect overlapping drafts to patch targets.
+7. Privacy tests ensure draft triggers paraphrase rather than copy sensitive
+   user content.
+8. Proposal patch tests verify revisions preserve lineage and rerun gates.
+9. Bundle tests verify model-visible summaries and CLI/WebUI listing behavior.
+10. Conditional visibility tests cover satisfied, missing, and fallback cases.
+11. Benchmark tests compare two proposal revisions over fixed eval prompts.
+12. Drift tests rerun activation/collision checks after adding a sibling skill.
+13. Rollback tests disable a promoted revision and restore previous behavior.
+14. Regression tests ensure existing `PREVIEW_ONLY`, `PERSISTED_PROPOSAL`, and
    `FULL_GATED` behavior remains unchanged.
 
 ## Rollout Plan
@@ -295,12 +338,16 @@ without automatically installing anything.
 
 Implement activation eval-benchmark for generated descriptions, triggers,
 `trigger_when`, and `skip_when`. This is the first slice because a candidate that
-misfires should not proceed to heavier authoring automation.
+misfires should not proceed to heavier authoring automation. P0 also needs the
+minimal proposal fields required to store activation results and a catalog-aware
+negative-prompt sourcer; without those, the metric cannot predict collisions.
 
 ### P1: Author Entry
 
 Implement draft seeds from run summaries and conversations. Feed seeds into the
-existing creator DAG. Do not add new proposal mutation or bundle behavior yet.
+existing creator DAG. Add refusal, duplicate detection, privacy scrubbing, and
+automatic P0 activation evaluation before reviewer acceptance. Do not add new
+proposal mutation or bundle behavior yet.
 
 ### P2: Proposal Iteration
 
@@ -325,7 +372,12 @@ not automatic installed skills.
 - A successful run can become a reviewable MetaSkill draft without manual YAML
   authoring.
 - Generated triggers and descriptions have measured positive and negative
-  activation behavior before acceptance.
+  activation behavior before acceptance, including catalog-derived negative
+  prompts.
+- Activation gates record true-positive rate, false-positive rate, sample count,
+  variance, and budget usage.
+- Drafting from a run can refuse incoherent traces, redirect duplicate drafts to
+  existing proposals, and avoid copying sensitive literal content into triggers.
 - Pending proposals can be improved through bounded patches.
 - Users can represent repeated skill co-loading as bundles without building a
   full MetaSkill.
@@ -333,6 +385,39 @@ not automatic installed skills.
 - Creator quality can be compared over eval prompts before promotion.
 - A promoted skill can be rolled back without manually editing files.
 - Missing tools or platform requirements are visible before invocation.
+
+## P0 and P1 Acceptance Criteria
+
+P0 activation measurement:
+
+- Given a proposal with `trigger_when` and `skip_when`, evaluator emits
+  true-positive rate and false-positive rate over at least 20 positive prompts
+  and 20 negative prompts.
+- Each activation prompt is sampled at least three times, with mean and variance
+  recorded in the proposal gate result.
+- At least half of negative prompts are catalog-derived from adjacent installed
+  skill or MetaSkill surfaces.
+- Initial hard gate target: true-positive rate at least 0.85, false-positive
+  rate at most 0.10, and variance band at most 0.05.
+- Evaluator completes within a small review-cycle budget, initially targeting no
+  more than 60 seconds per candidate on the standard test fixture.
+- Known-good and known-bad proposal fixtures remain on the expected side of the
+  gate in CI.
+
+P1 author entry:
+
+- Given a successful run trace, the system emits a draft containing name,
+  description, `trigger_when`, `skip_when`, tools, and initial output contract.
+- Trajectories without coherent single intent return `cannot draft: <reason>`
+  instead of malformed drafts.
+- Drafts auto-run through P0 activation evaluation and show scores before
+  reviewer acceptance.
+- Drafts with strong name or trigger overlap surface an existing proposal as a
+  patch target instead of silently creating a sibling.
+- Trigger examples paraphrase source material and do not embed literal user file
+  content, secrets, or personal data.
+- Recorded run-summary fixtures can produce drafts that meet P0 gates after at
+  most one bounded human edit pass.
 
 ## Risks and Mitigations
 
@@ -348,6 +433,18 @@ not automatic installed skills.
   hard suppression.
 - Risk: benchmark mode increases cost.
   Mitigation: make benchmark opt-in and reuse small eval prompt sets first.
+- Risk: activation scoring becomes noisy or expensive.
+  Mitigation: record repeated-sample variance and enforce per-proposal eval
+  budgets.
+- Risk: catalog-wide collision audits become quadratic.
+  Mitigation: scope audits to adjacent trigger neighborhoods before running
+  deeper checks.
+- Risk: draft seeds duplicate existing skills.
+  Mitigation: run duplicate detection before proposal creation and suggest patch
+  targets.
+- Risk: run-summary drafts leak sensitive user details.
+  Mitigation: paraphrase trigger examples and omit literal file, secret, and PII
+  content.
 - Risk: trigger text improves while DAG logic regresses.
   Mitigation: keep activation optimization and runtime logic optimization as
   separate passes with separate gates.
