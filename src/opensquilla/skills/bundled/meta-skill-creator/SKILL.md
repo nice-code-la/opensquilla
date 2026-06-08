@@ -276,7 +276,7 @@ composition:
           {{ outputs.clarify_intent | truncate(1000) }}
 
           Draft seed JSON, if supplied:
-          {{ inputs.draft_seed_json | default("") | truncate(2000) }}
+          {{ inputs.draft_seed_json | default("") | xml_escape | truncate(2000) }}
 
     - id: fill_slots
       label: "填充槽位"

@@ -277,6 +277,16 @@ def test_creator_dag_forwards_optional_draft_seed_to_fill_slots() -> None:
     assert plan is not None
     steps = {step.id: step for step in plan.steps}
 
+    seed_prompt_expr = '{{ inputs.draft_seed_json | default("") | xml_escape | truncate(2000) }}'
+    clarify_task = str(steps["clarify_intent"].with_args["task"])
+    assert "Optional draft seed JSON" in clarify_task
+    assert seed_prompt_expr in clarify_task
+    assert "unless the seed explicitly refuses drafting" in clarify_task
+
+    pick_pattern_user_intent = str(steps["pick_pattern"].with_args["user_intent"])
+    assert "Draft seed JSON, if supplied" in pick_pattern_user_intent
+    assert seed_prompt_expr in pick_pattern_user_intent
+
     fill_slots = steps["fill_slots"]
     assert fill_slots.tool_args["draft_seed_json"] == "{{ inputs.draft_seed_json | default('') }}"
     assert list(steps["generation_quality"].depends_on) == ["fill_slots"]
