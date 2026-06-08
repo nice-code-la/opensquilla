@@ -811,6 +811,45 @@ triggers:
     assert "missing_negative_prompts" in payload["issues"]
 
 
+def test_activation_eval_tool_auto_prompts_derive_passing_fixtures() -> None:
+    from opensquilla.skills.creator import proposer
+
+    skill_md = """---
+name: synth-alpha-report
+description: "Synthetic alpha report workflow."
+kind: meta
+meta_priority: 50
+triggers:
+  - "alpha report"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+
+    result = proposer.meta_skill_activation_eval_run(
+        skill_md=skill_md,
+        positive_prompts="auto",
+        catalog_negative_prompts="auto",
+    )
+
+    payload = json.loads(result)
+    assert payload["passed"] is True
+    assert payload["true_positive_rate"] == 1.0
+    assert payload["false_positive_count"] == 0
+    assert [case["kind"] for case in payload["cases"]] == [
+        "positive",
+        "negative",
+        "negative",
+        "negative",
+        "negative",
+    ]
+    assert payload["cases"][0]["prompt"] == "please use alpha report"
+
+
 def test_persist_proposal_forwards_generation_quality_and_activation_results(monkeypatch) -> None:
     from types import SimpleNamespace
 

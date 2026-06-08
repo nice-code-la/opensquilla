@@ -238,8 +238,8 @@ def test_creator_dag_runs_generation_quality_and_activation_before_persist(tmp_p
     assert activation_eval.tool == "meta_skill_activation_eval_run"
     assert activation_eval.tool_args == {
         "skill_md": "{{ outputs.assemble }}",
-        "positive_prompts": "",
-        "catalog_negative_prompts": "",
+        "positive_prompts": "auto",
+        "catalog_negative_prompts": "auto",
     }
 
     persist = steps["persist"]

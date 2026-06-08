@@ -316,8 +316,8 @@ composition:
       tool: meta_skill_activation_eval_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
-        positive_prompts: ""
-        catalog_negative_prompts: ""
+        positive_prompts: "auto"
+        catalog_negative_prompts: "auto"
 
     - id: collision_check
       label: "冲突检查"

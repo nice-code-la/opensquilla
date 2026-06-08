@@ -779,11 +779,35 @@ def meta_skill_activation_eval_run(
     negative_input = catalog_negative_prompts if catalog_negative_prompts else negative_prompts
     result = evaluate_candidate_activation(
         skill_md,
-        positive_prompts=_json_array_or_lines(positive_prompts),
-        negative_prompts=_json_array_or_lines(negative_input),
+        positive_prompts=_activation_prompt_list(
+            skill_md,
+            positive_prompts,
+            kind="positive",
+        ),
+        negative_prompts=_activation_prompt_list(
+            skill_md,
+            negative_input,
+            kind="negative",
+        ),
         threshold=threshold,
     )
     return json.dumps(result, ensure_ascii=False)
+
+
+def _activation_prompt_list(skill_md: str, raw: str, *, kind: str) -> list[str]:
+    text = str(raw or "").strip()
+    if text.lower() != "auto":
+        return _json_array_or_lines(raw)
+    if kind == "positive":
+        return [_deterministic_fixture(skill_md, "positive")]
+    if kind == "negative":
+        return [
+            "please summarize this note",
+            "what's the weather forecast for tomorrow?",
+            "create a normal standalone skill for note cleanup",
+            "explain how meta-skill-creator works",
+        ]
+    raise ValueError(f"Unknown activation prompt kind: {kind}")
 
 
 def _json_array_or_lines(raw: str) -> list[str]:
