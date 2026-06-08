@@ -586,7 +586,8 @@ def proposals_cmd(
     """
     import json as _json
     import re
-    import shutil
+
+    from opensquilla.skills import proposals_lib
 
     proposals_dir = _proposals_dir()
 
@@ -666,56 +667,23 @@ def proposals_cmd(
         return
 
     # action == "accept"
-    if not (src / "SKILL.md").is_file():
-        typer.echo(f"Error: proposal {proposal_id} not found", err=True)
+    result = proposals_lib.accept_proposal(_proposals_home(), proposal_id or "", force=force)
+    if result.get("status") != "ok":
+        reason = str(result.get("reason") or "proposal accept failed")
+        if result.get("status") == "refused":
+            typer.echo(f"Refused: {reason}", err=True)
+            gates = result.get("gates")
+            if isinstance(gates, dict):
+                typer.echo(_json.dumps(gates, indent=2), err=True)
+            raise typer.Exit(1)
+        typer.echo(f"Error: {reason}", err=True)
         raise typer.Exit(1)
 
-    gates = {}
-    if (src / "gates.json").is_file():
-        try:
-            gates = _json.loads((src / "gates.json").read_text())
-        except _json.JSONDecodeError:
-            gates = {}
-    if not gates.get("auto_enable_eligible") and not force:
-        typer.echo(
-            f"Refused: gates did not all pass for {proposal_id}. "
-            "Use --force to override.",
-            err=True,
-        )
-        if gates:
-            typer.echo(_json.dumps(gates, indent=2), err=True)
-        raise typer.Exit(1)
-
-    skill_md = (src / "SKILL.md").read_text(encoding="utf-8")
-    # Accept both quoted and unquoted YAML names (N3 fix).
-    name_match = re.search(r'^name:\s*"?([\w\-]+)"?\s*$', skill_md, re.MULTILINE)
-    if not name_match:
-        typer.echo(
-            "Error: cannot parse skill name from SKILL.md frontmatter",
-            err=True,
-        )
-        raise typer.Exit(1)
-    name = name_match.group(1)
-
-    dst = _skills_managed_dir() / name
-    if dst.exists():
-        typer.echo(
-            f"Refused: skill {name!r} already exists at {dst}. "
-            "Remove the existing copy first or rename the proposal.",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(src), str(dst))
+    name = str(result.get("name") or "")
+    dst = Path(str(result.get("skill_path") or ""))
     typer.echo(
         f"✅ Accepted proposal {proposal_id} as skill `{name}` at {dst}\n"
         "Restart the gateway to load the new skill from the MANAGED layer."
     )
     if json_out:
-        typer.echo(_json.dumps({
-            "status": "ok",
-            "proposal_id": proposal_id,
-            "name": name,
-            "skill_path": str(dst),
-        }))
+        typer.echo(_json.dumps(result))

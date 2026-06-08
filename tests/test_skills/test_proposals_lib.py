@@ -439,6 +439,73 @@ def test_write_proposal_rejects_non_boolean_creator_gate_passed_values(
     assert shown["gates"]["activation_eval"]["passed_raw"] == "true"
 
 
+def test_write_proposal_forces_creator_gate_required_in_required_mode(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        creator_mode="PERSISTED_PROPOSAL",
+        collision_result="PASS",
+        risk_result="RISK: low",
+        generation_quality_result={"required": False, "passed": True, "reason": "ok"},
+        activation_result={"required": False, "passed": True, "reason": "ok"},
+    )
+
+    assert result["auto_enable_eligible"] is True
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    assert shown["gates"]["generation_quality"]["required"] is True
+    assert shown["gates"]["activation_eval"]["required"] is True
+
+
+def test_full_gated_runtime_e2e_rejects_non_boolean_passed_value(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        creator_mode="FULL_GATED",
+        acceptance_result={
+            "raw": (
+                "WINNER: orchestrated\n"
+                "REASONS:\n"
+                "- candidate has stricter gates\n"
+                "REGRESSIONS:\n"
+                "- none\n"
+                "REQUIRED_IMPROVEMENTS:\n"
+                "- none\n"
+            ),
+        },
+        runtime_e2e_result=json.dumps({
+            "status": "ok",
+            "passed": "false",
+            "winner": "meta",
+            "cases": [
+                {
+                    "prompt": "please use synth test trigger",
+                    "winner": "meta",
+                    "regression": "",
+                },
+            ],
+        }),
+        collision_result="PASS: no trigger collision",
+        risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        generation_quality_result={"required": True, "passed": True, "reason": "ok"},
+        activation_result={"required": True, "passed": True, "reason": "ok"},
+    )
+
+    assert result["auto_enable_eligible"] is False
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    assert shown["gates"]["runtime_e2e"]["passed"] is False
+    assert shown["gates"]["runtime_e2e"]["reason"] == "invalid_runtime_e2e_passed_type"
+
+
 def test_write_proposal_requires_generation_and_activation_in_creator_modes(
     tmp_path: Path,
 ) -> None:

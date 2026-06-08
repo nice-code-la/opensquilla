@@ -309,6 +309,10 @@ composition:
         json.dumps(lint_result),
         json.dumps(smoke_result),
         home=str(home),
+        collision_result="PASS: no trigger collision",
+        risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        generation_quality_result=json.dumps({"required": True, "passed": True, "reason": "ok"}),
+        activation_result=json.dumps({"required": True, "passed": True, "reason": "ok"}),
     ))
 
     assert out["status"] == "ok"

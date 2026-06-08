@@ -153,3 +153,48 @@ def test_runs_list_empty(runner: CliRunner, tmp_path: Path, monkeypatch) -> None
     result = runner.invoke(cli_app, ["skills", "meta", "runs", "list", "--json"])
     assert result.exit_code == 0
     assert json.loads(result.output) == []
+
+
+def test_proposals_accept_refuses_stale_required_creator_gates(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(tmp_path))
+    proposal_id = "face1234"
+    proposal_dir = tmp_path / "proposals" / proposal_id
+    proposal_dir.mkdir(parents=True)
+    (proposal_dir / "SKILL.md").write_text(
+        """---
+name: stale-required-gates
+description: "Stale proposal missing current creator gates."
+kind: meta
+triggers:
+  - "stale required gates"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+""",
+        encoding="utf-8",
+    )
+    (proposal_dir / "gates.json").write_text(
+        json.dumps({
+            "creator_mode": "PERSISTED_PROPOSAL",
+            "auto_enable_eligible": True,
+        }),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        cli_app,
+        ["skills", "meta", "proposals", "accept", proposal_id],
+    )
+
+    assert result.exit_code == 1
+    assert "missing_generation_quality_result" in result.output
+    assert (proposal_dir / "SKILL.md").is_file()
+    assert not (tmp_path / "skills" / "stale-required-gates").exists()

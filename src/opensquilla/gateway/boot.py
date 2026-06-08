@@ -67,6 +67,8 @@ _AUTO_PROPOSE_TOOL_ALLOWLIST = frozenset(
         "emit_text",
         "meta_skill_fill_slots",
         "meta_skill_assemble",
+        "meta_skill_generation_quality_run",
+        "meta_skill_activation_eval_run",
         "meta_skill_lint_run",
         "meta_skill_smoke_run",
         "meta_skill_runtime_e2e_run",

@@ -248,7 +248,7 @@ def _normalise_gate_payload(
         payload = dict(parsed) if isinstance(parsed, dict) else {"raw": text}
     else:
         payload = {"raw": str(value)}
-    payload.setdefault("required", required)
+    payload["required"] = bool(required or payload.get("required") is True)
     if "passed" in payload:
         passed = payload["passed"]
         if isinstance(passed, bool):
@@ -291,10 +291,24 @@ def _enforce_required_creator_quality_gates(gates: dict) -> bool:
             missing_reason="missing_generation_quality_result",
         )
         gates["generation_quality"] = generation_quality_gate
+    else:
+        generation_quality_gate = _normalise_gate_payload(
+            generation_quality_gate,
+            required=True,
+            missing_reason="missing_generation_quality_result",
+        )
+        gates["generation_quality"] = generation_quality_gate
     activation_gate = gates.get("activation_eval")
     if not isinstance(activation_gate, dict):
         activation_gate = _normalise_gate_payload(
             None,
+            required=True,
+            missing_reason="missing_activation_result",
+        )
+        gates["activation_eval"] = activation_gate
+    else:
+        activation_gate = _normalise_gate_payload(
+            activation_gate,
             required=True,
             missing_reason="missing_activation_result",
         )
@@ -335,18 +349,23 @@ def _evaluate_runtime_e2e(
             case_blockers.append(f"case_{index}_winner:{case_winner or 'missing'}")
         if regression:
             case_blockers.append(f"case_{index}_regression")
+    passed_value = payload.get("passed", False)
+    passed_is_bool = isinstance(passed_value, bool)
     passed = (
         (not required)
         or (
-            bool(payload.get("passed", False))
+            passed_value is True
             and winner in {"meta", "tie"}
             and not case_blockers
         )
     )
+    reason = str(payload.get("reason") or "runtime_e2e_failed")
+    if required and "passed" in payload and not passed_is_bool:
+        reason = "invalid_runtime_e2e_passed_type"
     return {
         "required": required,
         "passed": passed,
-        "reason": "ok" if passed else str(payload.get("reason") or "runtime_e2e_failed"),
+        "reason": "ok" if passed else reason,
         "winner": winner,
         "baseline_model": payload.get("baseline_model", ""),
         "cases": cases,
@@ -408,8 +427,8 @@ def write_proposal(
         and bool(risk_gate.get("passed", False))
         and bool(acceptance_gate.get("passed", False))
         and bool(runtime_gate.get("passed", False))
-        and bool(generation_quality_gate.get("passed", False))
-        and bool(activation_gate.get("passed", False))
+        and generation_quality_gate.get("passed") is True
+        and activation_gate.get("passed") is True
     )
     gates = {
         "creator_mode": mode,

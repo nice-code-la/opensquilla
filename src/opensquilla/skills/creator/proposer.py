@@ -885,12 +885,13 @@ def meta_skill_persist_proposal(
 ) -> str:
     """Write a proposal candidate to ~/.opensquilla/proposals/<id>/. Returns JSON."""
     home_path = Path(home).expanduser() if home else None
+    effective_creator_mode = creator_mode or "PERSISTED_PROPOSAL"
     args = [sys.executable, str(_PROPOSALS_SCRIPT),
             "--action", "write_proposal",
             "--skill-md-inline", skill_md,
             "--lint-result", lint_result,
             "--smoke-result", smoke_result,
-            "--creator-mode", creator_mode,
+            "--creator-mode", effective_creator_mode,
             "--acceptance-result", acceptance_result,
             "--runtime-e2e-result", runtime_e2e_result,
             "--collision-result", collision_result,

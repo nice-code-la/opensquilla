@@ -11,6 +11,7 @@ import pytest
 
 from opensquilla.engine.types import AgentConfig, DoneEvent
 from opensquilla.gateway.boot import (
+    _AUTO_PROPOSE_TOOL_ALLOWLIST,
     _configured_agent_ids,
     _gateway_home,
     _register_dream_crons,
@@ -35,6 +36,29 @@ from opensquilla.session.models import SessionIntent
 from opensquilla.session.storage import SessionStorage
 from opensquilla.tools.registry import ToolRegistry
 from opensquilla.tools.types import CallerKind, ToolContext, ToolSpec
+
+
+def test_auto_propose_tool_allowlist_covers_meta_skill_creator_dag(
+    tmp_path: Path,
+) -> None:
+    from opensquilla.skills.loader import SkillLoader
+    from opensquilla.skills.meta.parser import parse_meta_plan
+
+    bundled = Path(__file__).resolve().parents[2] / "src" / "opensquilla" / "skills" / "bundled"
+    loader = SkillLoader(bundled_dir=bundled, snapshot_path=tmp_path / "snap.json")
+    loader.invalidate_cache()
+    creator = loader.get_by_name("meta-skill-creator")
+    assert creator is not None
+    plan = parse_meta_plan(creator)
+    assert plan is not None
+
+    dag_tools = {
+        str(step.tool)
+        for step in plan.steps
+        if step.kind == "tool_call" and step.tool
+    }
+
+    assert dag_tools <= _AUTO_PROPOSE_TOOL_ALLOWLIST
 
 
 def test_gateway_boot_bridges_compaction_notifications_to_session_stream() -> None:
