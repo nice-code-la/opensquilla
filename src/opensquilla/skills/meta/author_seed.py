@@ -12,10 +12,12 @@ from opensquilla.skills.meta.plan_serde import from_jsonable
 from opensquilla.skills.meta.types import MetaPlan
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _SECRET_LITERAL_RE = re.compile(
     r"(?i)\b(?:sk|pk|ghp|gho|ghu|ghs|ghr|xoxb|xoxp)[_-][A-Za-z0-9_\-]{8,}\b"
 )
 _FILE_PATH_RE = re.compile(r"(?:/[A-Za-z0-9._\- ]+){2,}\.[A-Za-z0-9]{1,8}")
+_DUPLICATE_THRESHOLD = 0.75
 
 
 def draft_meta_skill_seed(
@@ -29,6 +31,7 @@ def draft_meta_skill_seed(
     JSON payload for CLI/WebUI authoring surfaces: trigger candidates,
     description, composition skeleton, inherited contracts, and conflict hints.
     """
+    existing_specs = list(existing_specs)
     inputs = _json_obj(record.inputs_json)
     plan = _plan_from_record(record)
     raw_user_message = str(inputs.get("user_message") or inputs.get("message") or "").strip()
@@ -76,6 +79,11 @@ def draft_meta_skill_seed(
         "status": "ok",
         **normalized,
         **({"privacy_warnings": privacy_warnings} if privacy_warnings else {}),
+        "duplicate_detection": _detect_duplicate(
+            goal,
+            trigger_candidates,
+            existing_specs=existing_specs,
+        ),
         "creator_input": creator_input,
         "source_run": _source_run(record),
         "name": f"{_slug(record.meta_skill_name)}-draft",
@@ -112,6 +120,52 @@ def detect_trigger_conflicts(
                     "skill": str(getattr(spec, "name", "")),
                 })
     return conflicts
+
+
+def _detect_duplicate(
+    goal: str,
+    trigger_candidates: Iterable[str],
+    *,
+    existing_specs: Iterable[Any],
+) -> dict[str, Any]:
+    source_tokens = _tokens_from_parts([goal, *trigger_candidates])
+    best_name: str | None = None
+    best_score = 0.0
+    for spec in existing_specs:
+        spec_parts = [
+            str(getattr(spec, "name", "")),
+            str(getattr(spec, "description", "")),
+            *[str(trigger) for trigger in getattr(spec, "triggers", []) or []],
+        ]
+        score = _jaccard(source_tokens, _tokens_from_parts(spec_parts))
+        if score > best_score:
+            best_score = score
+            best_name = str(getattr(spec, "name", "")) or None
+    rounded_score = round(best_score, 3)
+    if best_name and best_score >= _DUPLICATE_THRESHOLD:
+        return {
+            "suggested_action": "patch_existing",
+            "target": best_name,
+            "score": rounded_score,
+        }
+    return {
+        "suggested_action": "create_new",
+        "target": None,
+        "score": rounded_score,
+    }
+
+
+def _tokens_from_parts(parts: Iterable[str]) -> set[str]:
+    tokens: set[str] = set()
+    for part in parts:
+        tokens.update(_TOKEN_RE.findall(part.lower()))
+    return tokens
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
 
 
 def _plan_from_record(record: RunRecord) -> MetaPlan | None:

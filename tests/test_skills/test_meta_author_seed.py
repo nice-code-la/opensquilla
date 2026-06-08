@@ -183,3 +183,43 @@ def test_author_seed_scrubs_plan_derived_payloads() -> None:
     assert "[file]" in payload
     assert seed["outputs"] == ["Evidence from [file]"]
     assert seed["privacy_warnings"] == ["secret_like_text_redacted", "file_path_redacted"]
+
+
+class _Spec:
+    def __init__(self, name: str, description: str, triggers: list[str]) -> None:
+        self.name = name
+        self.description = description
+        self.triggers = triggers
+
+
+def test_author_seed_recommends_patch_for_strong_duplicate() -> None:
+    seed = draft_meta_skill_seed(
+        _record(user_message="Research a vendor and produce a decision brief."),
+        existing_specs=[
+            _Spec(
+                "meta-vendor-decision-brief",
+                "Research a vendor and produce a decision brief.",
+                ["vendor decision brief"],
+            )
+        ],
+    )
+
+    duplicate = seed["duplicate_detection"]
+    assert duplicate["suggested_action"] == "patch_existing"
+    assert duplicate["target"] == "meta-vendor-decision-brief"
+    assert duplicate["score"] >= 0.75
+
+
+def test_author_seed_allows_distinct_seed() -> None:
+    seed = draft_meta_skill_seed(
+        _record(user_message="Plan a school science fair project."),
+        existing_specs=[
+            _Spec(
+                "meta-vendor-decision-brief",
+                "Research vendors for procurement decisions.",
+                ["vendor decision brief"],
+            )
+        ],
+    )
+
+    assert seed["duplicate_detection"]["suggested_action"] == "create_new"
