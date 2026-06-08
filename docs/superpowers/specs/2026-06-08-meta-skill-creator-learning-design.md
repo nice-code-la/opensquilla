@@ -35,17 +35,20 @@ requirements, and hub/tap distribution metadata.
    truth for installable workflows.
 2. Add a lightweight author entry that can turn a successful conversation,
    MetaSkill run, or run summary into a proposal draft.
-3. Measure activation quality with explicit positive and negative prompts before
+3. Improve generation quality through explicit intent distillation, workflow
+   shape selection, slot completion, output-contract synthesis, and generator
+   rationale.
+4. Measure activation quality with explicit positive and negative prompts before
    relying on a generated trigger or description.
-4. Support small proposal improvements through patch/edit flows instead of
+5. Support small proposal improvements through patch/edit flows instead of
    forcing full regeneration.
-5. Add a lightweight bundle/profile layer for repeated skill combinations that
+6. Add a lightweight bundle/profile layer for repeated skill combinations that
    do not need a DAG.
-6. Extend existing conditional visibility metadata so skills and MetaSkills only
+7. Extend existing conditional visibility metadata so skills and MetaSkills only
    surface when their tool and platform requirements can be satisfied.
-7. Add evaluation and benchmark loops for creator output quality, using
+8. Add evaluation and benchmark loops for creator output quality, using
    existing `eval_prompts`, `output_contract`, and runtime E2E infrastructure.
-8. Support lifecycle controls for versioning, supersession, deprecation, and
+9. Support lifecycle controls for versioning, supersession, deprecation, and
    one-command rollback of promoted proposals.
 
 ## Non-Goals
@@ -83,6 +86,37 @@ summary, or explicit user description and produces a normalized
 
 The seed helper does not write proposals. It only prepares structured input for
 the existing `meta-skill-creator` DAG.
+
+### Layer 1A: Generation Capability Scaffold
+
+Generation quality should improve before evaluation filters the output. Treat the
+creator as a structured authoring pipeline, not a single text-generation prompt.
+
+The generator should make these decisions explicit:
+
+- intent distillation: one-sentence goal, target user outcome, and stop
+  condition;
+- workflow shape: ordinary skill, MetaSkill, bundle, patch to an existing
+  proposal, or refusal;
+- pattern selection: which reusable workflow archetype or successful prior
+  proposal it is adapting;
+- slot completion: required inputs, outputs, constraints, tools, gates, and
+  failure handling;
+- output contract synthesis: final response sections, artifacts, and completion
+  evidence;
+- alternative rejection: nearby shapes or skills considered and why they were
+  not chosen.
+
+Each candidate should carry a compact `generation_rationale` with the selected
+shape, source evidence, filled slots, unresolved assumptions, and rejected
+alternatives. This rationale is not user-facing prose; it is review and gate
+material that makes creator capability measurable.
+
+Use a curated pattern library rather than open-ended generation whenever
+possible. Good patterns include verification recipe, research-to-report,
+debug-fix-verify, data-generation pipeline, UI QA loop, and recurring operator
+brief. The pattern library can be seeded from accepted proposals and successful
+runs, but additions remain reviewable.
 
 ### Layer 2: Creator Modes
 
@@ -132,6 +166,8 @@ This pass is separate from runtime logic E2E. A candidate can have correct DAG
 logic and still be unsafe if its description or triggers misroute user intent.
 Description optimization should iterate only the activation surface. Logic
 optimization should iterate the DAG, step inputs, output contract, and gates.
+Generation optimization should iterate intent distillation, shape choice, pattern
+selection, slot completion, and output contract synthesis.
 
 ### Layer 3: Proposal Patch/Edit
 
@@ -217,6 +253,8 @@ The initial behavior should be conservative:
 
 Creator output should be evaluated through explicit prompts and contracts:
 
+- generation-quality checks verify shape choice, slot completeness, minimality,
+  output-contract fit, tool correctness, and rationale quality.
 - `eval_prompts` supply positive and negative activation cases.
 - `output_contract` defines required final sections and artifacts.
 - runtime E2E compares candidate MetaSkill output against a no-meta baseline.
@@ -234,6 +272,12 @@ the catalog grows.
 
 This borrows Claude's create/eval/improve/benchmark lifecycle while keeping
 OpenSquilla's proposal gates.
+
+Generation benchmarking should diagnose the creator output before activation or
+runtime scoring hides the reason for failure. A failed candidate should be tagged
+with a small failure taxonomy, such as wrong workflow shape, missing required
+slot, overbroad trigger, under-specified output contract, unnecessary tool,
+missing gate, duplicate existing skill, or privacy-unsafe example.
 
 ### Layer 7: Procedural Memory Feedback
 
@@ -260,13 +304,16 @@ without automatically installing anything.
    reason when the trace lacks a coherent single intent.
 3. Duplicate detection checks whether the seed should patch an existing proposal
    instead of creating a sibling.
-4. `meta-skill-creator` receives the seed as structured intent.
+4. Creator distills intent, selects workflow shape, chooses a pattern, fills
+   slots, and emits `generation_rationale`.
 5. Existing slot filling and assembly produce a candidate.
-6. Activation eval checks positive, negative, and catalog-adjacent trigger
+6. Generation-quality checks verify shape choice, completeness, minimality,
+   output contract, and tool fit.
+7. Activation eval checks positive, negative, and catalog-adjacent trigger
    behavior.
-7. Existing gates run according to creator mode.
-8. User reviews preview or pending proposal.
-9. Accept flow promotes only eligible proposals unless force is explicit.
+8. Existing gates run according to creator mode.
+9. User reviews preview or pending proposal.
+10. Accept flow promotes only eligible proposals unless force is explicit.
 
 ### Proposal Patch
 
@@ -297,6 +344,13 @@ without automatically installing anything.
 - If activation prompts are missing, derive a minimal positive/negative set from
   `trigger_when`, `skip_when`, candidate triggers, and catalog-adjacent skills
   before persistence.
+- If generation rationale is missing or contradicts the assembled candidate,
+  keep the proposal in preview-only or ineligible state until repaired.
+- If the generator selects a MetaSkill for a non-DAG co-loading use case,
+  recommend a bundle; if it selects a bundle for dependent steps, recommend a
+  MetaSkill.
+- If required slots cannot be inferred safely, request clarification rather than
+  inventing inputs, gates, or output contracts.
 - If a run summary contains file content, secrets, or personal data, paraphrase
   trigger examples and omit literal content from the draft.
 - If duplicate detection finds a strong trigger overlap, recommend patching the
@@ -314,33 +368,36 @@ without automatically installing anything.
 
 1. Parser and loader tests preserve new metadata fields.
 2. Draft seed tests convert run summaries into deterministic seed payloads.
-3. Activation eval tests cover positive, negative, neighboring-domain, and
+3. Generation-quality tests cover shape choice, pattern selection, slot
+   completeness, output-contract synthesis, and rationale consistency.
+4. Activation eval tests cover positive, negative, neighboring-domain, and
    variance cases for generated descriptions and triggers.
-4. Creator DAG tests verify seed payloads reach slot filling without losing raw
+5. Creator DAG tests verify seed payloads reach slot filling without losing raw
    user constraints.
-5. Draft refusal tests return `cannot draft` for incoherent or multi-intent
+6. Draft refusal tests return `cannot draft` for incoherent or multi-intent
    traces.
-6. Duplicate-detection tests redirect overlapping drafts to patch targets.
-7. Privacy tests ensure draft triggers paraphrase rather than copy sensitive
+7. Duplicate-detection tests redirect overlapping drafts to patch targets.
+8. Privacy tests ensure draft triggers paraphrase rather than copy sensitive
    user content.
-8. Proposal patch tests verify revisions preserve lineage and rerun gates.
-9. Bundle tests verify model-visible summaries and CLI/WebUI listing behavior.
-10. Conditional visibility tests cover satisfied, missing, and fallback cases.
-11. Benchmark tests compare two proposal revisions over fixed eval prompts.
-12. Drift tests rerun activation/collision checks after adding a sibling skill.
-13. Rollback tests disable a promoted revision and restore previous behavior.
-14. Regression tests ensure existing `PREVIEW_ONLY`, `PERSISTED_PROPOSAL`, and
+9. Proposal patch tests verify revisions preserve lineage and rerun gates.
+10. Bundle tests verify model-visible summaries and CLI/WebUI listing behavior.
+11. Conditional visibility tests cover satisfied, missing, and fallback cases.
+12. Benchmark tests compare two proposal revisions over fixed eval prompts.
+13. Drift tests rerun activation/collision checks after adding a sibling skill.
+14. Rollback tests disable a promoted revision and restore previous behavior.
+15. Regression tests ensure existing `PREVIEW_ONLY`, `PERSISTED_PROPOSAL`, and
    `FULL_GATED` behavior remains unchanged.
 
 ## Rollout Plan
 
-### P0: Activation Measurement
+### P0: Generation and Activation Foundation
 
-Implement activation eval-benchmark for generated descriptions, triggers,
-`trigger_when`, and `skip_when`. This is the first slice because a candidate that
-misfires should not proceed to heavier authoring automation. P0 also needs the
-minimal proposal fields required to store activation results and a catalog-aware
-negative-prompt sourcer; without those, the metric cannot predict collisions.
+Implement the minimal proposal fields, generation rationale, pattern-library
+hooks, generation-quality checks, and activation eval-benchmark for generated
+descriptions, triggers, `trigger_when`, and `skip_when`. This is the first slice
+because a candidate that is badly generated or misfires should not proceed to
+heavier authoring automation. P0 also needs a catalog-aware negative-prompt
+sourcer; without it, the metric cannot predict collisions.
 
 ### P1: Author Entry
 
@@ -371,6 +428,10 @@ not automatic installed skills.
 
 - A successful run can become a reviewable MetaSkill draft without manual YAML
   authoring.
+- Generated candidates explain their intent, workflow shape, selected pattern,
+  completed slots, unresolved assumptions, and rejected alternatives.
+- Candidate generation quality is checked for shape choice, slot completeness,
+  output-contract fit, tool correctness, minimality, and rationale consistency.
 - Generated triggers and descriptions have measured positive and negative
   activation behavior before acceptance, including catalog-derived negative
   prompts.
@@ -388,7 +449,24 @@ not automatic installed skills.
 
 ## P0 and P1 Acceptance Criteria
 
-P0 activation measurement:
+P0 generation and activation foundation:
+
+Generation capability:
+
+- Given the same seed, the creator emits a candidate with stable intent
+  distillation, workflow shape, selected pattern, filled slots, output contract,
+  and `generation_rationale`.
+- Shape-choice fixtures cover ordinary skill, MetaSkill, bundle, patch target,
+  and refusal outcomes.
+- Required slots are either filled from evidence or explicitly marked as missing;
+  the generator does not invent tools, gates, inputs, or output contracts.
+- Generated candidates include a compact alternative-rejection list for at least
+  one nearby workflow shape or existing skill.
+- Generation-quality gates flag wrong shape, missing slot, unnecessary tool,
+  under-specified output contract, duplicate existing skill, and privacy-unsafe
+  example failures.
+
+Activation measurement:
 
 - Given a proposal with `trigger_when` and `skip_when`, evaluator emits
   true-positive rate and false-positive rate over at least 20 positive prompts
@@ -433,6 +511,15 @@ P1 author entry:
   hard suppression.
 - Risk: benchmark mode increases cost.
   Mitigation: make benchmark opt-in and reuse small eval prompt sets first.
+- Risk: creator improves trigger scores while still generating weak workflows.
+  Mitigation: add generation-quality gates for workflow shape, pattern selection,
+  slot completeness, output-contract fit, and rationale consistency.
+- Risk: generator invents plausible but unsupported workflow details.
+  Mitigation: require each critical slot to be evidence-backed or explicitly
+  marked missing for clarification.
+- Risk: pattern library narrows creativity too much.
+  Mitigation: allow a reviewed custom pattern path, but require an explicit
+  alternative-rejection rationale and normal gates before promotion.
 - Risk: activation scoring becomes noisy or expensive.
   Mitigation: record repeated-sample variance and enforce per-proposal eval
   budgets.
@@ -457,6 +544,7 @@ P1 author entry:
 - OpenSquilla already supports creator modes, proposal gates, runtime E2E,
   auto-enable eligibility, and a first slice of conditional activation metadata.
 - Claude Code contributes the skill/command unification, dynamic context,
-  isolated skill execution, and create/eval/improve/benchmark lifecycle.
+  isolated skill execution, readable skill artifacts, and
+  create/eval/improve/benchmark lifecycle.
 - Hermes Agent contributes agent-managed skill patching, skill bundles,
   conditional requirements, hub/tap lifecycle, and procedural-memory learning.
