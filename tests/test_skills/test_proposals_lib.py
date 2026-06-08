@@ -405,6 +405,40 @@ def test_write_proposal_blocks_failed_activation_gate(tmp_path: Path) -> None:
     assert shown["gates"]["activation_eval"]["passed"] is False
 
 
+def test_write_proposal_rejects_non_boolean_creator_gate_passed_values(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        creator_mode="PERSISTED_PROPOSAL",
+        collision_result="PASS",
+        risk_result="RISK: low",
+        generation_quality_result=json.dumps({
+            "required": True,
+            "passed": "false",
+            "reason": "ok",
+        }),
+        activation_result={
+            "required": True,
+            "passed": "true",
+            "reason": "ok",
+        },
+    )
+
+    assert result["auto_enable_eligible"] is False
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    assert shown["gates"]["generation_quality"]["passed"] is False
+    assert shown["gates"]["generation_quality"]["reason"] == "invalid_gate_passed_type"
+    assert shown["gates"]["generation_quality"]["passed_raw"] == "false"
+    assert shown["gates"]["activation_eval"]["passed"] is False
+    assert shown["gates"]["activation_eval"]["reason"] == "invalid_gate_passed_type"
+    assert shown["gates"]["activation_eval"]["passed_raw"] == "true"
+
+
 def test_write_proposal_requires_generation_and_activation_in_creator_modes(
     tmp_path: Path,
 ) -> None:
@@ -516,6 +550,30 @@ def test_accept_refuses_when_gates_fail_without_force(tmp_path: Path) -> None:
     assert out["status"] == "refused"
     out2 = proposals_lib.accept_proposal(home, pid, force=True)
     assert out2["status"] == "ok"
+
+
+def test_accept_refuses_stale_required_creator_proposal_missing_new_gates(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    pid = _seed_proposal(home)
+    gates_path = home / "proposals" / pid / "gates.json"
+    gates = json.loads(gates_path.read_text())
+    gates["auto_enable_eligible"] = True
+    gates["collision_check"] = {"required": True, "passed": True, "reason": "ok"}
+    gates["risk_classify"] = {"required": True, "passed": True, "reason": "ok"}
+    gates.pop("generation_quality", None)
+    gates.pop("activation_eval", None)
+    gates_path.write_text(json.dumps(gates))
+
+    out = proposals_lib.accept_proposal(home, pid)
+
+    assert out["status"] == "refused"
+    assert "gates not all passed" in out["reason"]
+    assert out["gates"]["generation_quality"]["reason"] == (
+        "missing_generation_quality_result"
+    )
+    assert out["gates"]["activation_eval"]["reason"] == "missing_activation_result"
 
 
 def test_accept_refuses_when_target_skill_exists(tmp_path: Path) -> None:

@@ -25,6 +25,7 @@ PROPOSAL_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
 SKILL_NAME_PATTERN = re.compile(r"[\w\-]+")
 RISK_LEVELS = frozenset({"low", "medium", "high"})
 _NO_REQUIRED_IMPROVEMENTS = frozenset({"", "none", "no", "n/a", "not applicable"})
+_CREATOR_QUALITY_REQUIRED_MODES = frozenset({"FULL_GATED", "PERSISTED_PROPOSAL"})
 
 
 def proposals_dir(home: Path) -> Path:
@@ -248,9 +249,61 @@ def _normalise_gate_payload(
     else:
         payload = {"raw": str(value)}
     payload.setdefault("required", required)
-    payload.setdefault("passed", bool(payload.get("passed", False)))
-    payload.setdefault("reason", "ok" if payload.get("passed") else missing_reason)
+    if "passed" in payload:
+        passed = payload["passed"]
+        if isinstance(passed, bool):
+            payload["passed"] = passed
+        else:
+            payload["passed_raw"] = passed
+            payload["passed"] = False
+            payload["reason"] = "invalid_gate_passed_type"
+    else:
+        payload["passed"] = False
+    payload.setdefault("reason", "ok" if payload["passed"] else missing_reason)
     return payload
+
+
+def _creator_quality_gates_required_from_gates(gates: dict) -> bool:
+    mode = str(gates.get("creator_mode") or "").strip().upper()
+    if mode in _CREATOR_QUALITY_REQUIRED_MODES:
+        return True
+    required_gate_names = (
+        "collision_check",
+        "risk_classify",
+        "acceptance_compare",
+        "runtime_e2e",
+    )
+    for name in required_gate_names:
+        gate = gates.get(name)
+        if isinstance(gate, dict) and gate.get("required") is True:
+            return True
+    return False
+
+
+def _enforce_required_creator_quality_gates(gates: dict) -> bool:
+    if not _creator_quality_gates_required_from_gates(gates):
+        return bool(gates.get("auto_enable_eligible", False))
+    generation_quality_gate = gates.get("generation_quality")
+    if not isinstance(generation_quality_gate, dict):
+        generation_quality_gate = _normalise_gate_payload(
+            None,
+            required=True,
+            missing_reason="missing_generation_quality_result",
+        )
+        gates["generation_quality"] = generation_quality_gate
+    activation_gate = gates.get("activation_eval")
+    if not isinstance(activation_gate, dict):
+        activation_gate = _normalise_gate_payload(
+            None,
+            required=True,
+            missing_reason="missing_activation_result",
+        )
+        gates["activation_eval"] = activation_gate
+    return (
+        bool(gates.get("auto_enable_eligible", False))
+        and generation_quality_gate.get("passed") is True
+        and activation_gate.get("passed") is True
+    )
 
 
 def _evaluate_runtime_e2e(
@@ -359,6 +412,7 @@ def write_proposal(
         and bool(activation_gate.get("passed", False))
     )
     gates = {
+        "creator_mode": mode,
         "lint": lint_result,
         "smoke": smoke_result,
         "collision_check": collision_gate,
@@ -484,7 +538,8 @@ def accept_proposal(home: Path, proposal_id: str, force: bool = False) -> dict:
             gates = json.loads((src / "gates.json").read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             gates = {}
-    if not gates.get("auto_enable_eligible") and not force:
+    gates_passed = _enforce_required_creator_quality_gates(gates)
+    if not gates_passed and not force:
         return {
             "status": "refused",
             "reason": "gates not all passed; use --force to override",
