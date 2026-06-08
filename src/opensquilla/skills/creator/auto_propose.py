@@ -559,7 +559,7 @@ def _try_auto_enable_proposal(
         except (json.JSONDecodeError, OSError):
             gates = {}
     decision: dict[str, object]
-    if not bool(gates.get("auto_enable_eligible", False)):
+    if gates.get("auto_enable_eligible") is not True:
         decision = {
             "status": "skipped",
             "proposal_id": proposal_id,

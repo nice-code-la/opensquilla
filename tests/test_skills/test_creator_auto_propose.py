@@ -321,6 +321,47 @@ composition:
     assert loader.get_by_name("synth-history-summary") is not None
 
 
+def test_try_auto_enable_requires_boolean_true_eligibility_flag(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    proposals_dir = home / "proposals"
+    proposal_dir = proposals_dir / "face1234"
+    proposal_dir.mkdir(parents=True)
+    skill_md = """---
+name: synth-string-eligible
+kind: meta
+triggers:
+  - synth string eligible
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+"""
+    (proposal_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+    (proposal_dir / "gates.json").write_text(
+        json.dumps({"auto_enable_eligible": "false"}),
+        encoding="utf-8",
+    )
+    loader = _loader_with_managed_dir(home)
+
+    decision = try_auto_enable_proposal(
+        proposals_dir=proposals_dir,
+        proposal_id="face1234",
+        skill_loader=loader,
+        triggered_by="cron",
+        max_risk="low",
+    )
+
+    assert decision["status"] == "skipped"
+    assert decision["reason"] == "gates_not_eligible"
+    assert (proposal_dir / "SKILL.md").is_file()
+    assert not (home / "skills" / "synth-string-eligible").exists()
+
+
 @pytest.mark.asyncio
 async def test_auto_enable_keeps_unescaped_user_input_proposal_pending(
     tmp_path: Path,

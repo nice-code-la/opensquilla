@@ -282,7 +282,7 @@ def _creator_quality_gates_required_from_gates(gates: dict) -> bool:
 
 def _enforce_required_creator_quality_gates(gates: dict) -> bool:
     if not _creator_quality_gates_required_from_gates(gates):
-        return bool(gates.get("auto_enable_eligible", False))
+        return gates.get("auto_enable_eligible") is True
     generation_quality_gate = gates.get("generation_quality")
     if not isinstance(generation_quality_gate, dict):
         generation_quality_gate = _normalise_gate_payload(
@@ -314,7 +314,7 @@ def _enforce_required_creator_quality_gates(gates: dict) -> bool:
         )
         gates["activation_eval"] = activation_gate
     return (
-        bool(gates.get("auto_enable_eligible", False))
+        gates.get("auto_enable_eligible") is True
         and generation_quality_gate.get("passed") is True
         and activation_gate.get("passed") is True
     )

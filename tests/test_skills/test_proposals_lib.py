@@ -664,6 +664,22 @@ def test_accept_refuses_stale_required_creator_proposal_missing_new_gates(
     assert out["gates"]["activation_eval"]["reason"] == "missing_activation_result"
 
 
+def test_accept_requires_boolean_true_auto_enable_eligible(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    pid = _seed_proposal(home)
+    gates_path = home / "proposals" / pid / "gates.json"
+    gates = json.loads(gates_path.read_text())
+    gates["auto_enable_eligible"] = "false"
+    gates_path.write_text(json.dumps(gates))
+
+    out = proposals_lib.accept_proposal(home, pid)
+
+    assert out["status"] == "refused"
+    assert "gates not all passed" in out["reason"]
+
+
 def test_accept_refuses_when_target_skill_exists(tmp_path: Path) -> None:
     home = tmp_path / ".opensquilla"
     pid1 = _seed_proposal(home)
