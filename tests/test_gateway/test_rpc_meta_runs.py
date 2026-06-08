@@ -184,6 +184,28 @@ def test_meta_runs_draft_rpc_returns_creator_input_when_requested(tmp_path: Path
     assert json.loads(payload["creator_input"]["draft_seed_json"])["evidence_refs"] == [run_id]
 
 
+def test_meta_runs_draft_rpc_returns_null_creator_input_for_cannot_draft(
+    tmp_path: Path,
+) -> None:
+    writer, run_id = _seed_writer(tmp_path)
+    writer.finish_run_sync(
+        run_id=run_id,
+        status="failed",
+        result=MetaResult(ok=False, error="boom", failed_step_id="s1"),
+    )
+    try:
+        ctx = RpcContext(conn_id="test", meta_run_writer=writer)
+        payload = asyncio.run(_handle_meta_runs_draft({
+            "runId": run_id,
+            "includeCreatorInput": True,
+        }, ctx))
+    finally:
+        writer.close()
+
+    assert payload["draft"]["status"] == "cannot_draft"
+    assert payload["creator_input"] is None
+
+
 def test_meta_runs_confirm_preflight_requires_template_fields(tmp_path: Path) -> None:
     writer, run_id = _seed_writer(tmp_path)
     try:
