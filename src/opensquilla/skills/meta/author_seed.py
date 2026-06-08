@@ -58,7 +58,7 @@ def draft_meta_skill_seed(
             "meta_skill_name": record.meta_skill_name,
             "status": record.status,
         },
-        "name": f"{_slug(_draft_base_name(record.meta_skill_name))}-draft",
+        "name": f"{_slug(record.meta_skill_name)}-draft",
         "description": _draft_description(record, user_message),
         "trigger_candidates": trigger_candidates,
         "trigger_conflicts": detect_trigger_conflicts(

@@ -105,7 +105,7 @@ def test_author_seed_preserves_legacy_keys() -> None:
     seed = draft_meta_skill_seed(_record())
 
     assert seed["source_run"]["run_id"] == "run_01"
-    assert seed["name"] == "vendor-brief-draft"
+    assert seed["name"] == "meta-vendor-brief-draft"
     assert seed["trigger_candidates"] == seed["candidate_triggers"]
     assert seed["request_template"]["outcome"] == "Decision brief"
     assert seed["output_contract"]["required_sections"] == ["Recommendation", "Evidence"]
