@@ -772,12 +772,15 @@ def meta_skill_activation_eval_run(
     skill_md: str,
     positive_prompts: str = "",
     negative_prompts: str = "",
+    catalog_negative_prompts: str = "",
+    *,
     threshold: float = 0.8,
 ) -> str:
+    negative_input = catalog_negative_prompts if catalog_negative_prompts else negative_prompts
     result = evaluate_candidate_activation(
         skill_md,
         positive_prompts=_json_array_or_lines(positive_prompts),
-        negative_prompts=_json_array_or_lines(negative_prompts),
+        negative_prompts=_json_array_or_lines(negative_input),
         threshold=threshold,
     )
     return json.dumps(result, ensure_ascii=False)
@@ -1182,7 +1185,7 @@ async def meta_skill_generation_quality_run_tool(
         "skill_md": {"type": "string"},
         "positive_prompts": {"type": "string"},
         "negative_prompts": {"type": "string"},
-        "threshold": {"type": "number"},
+        "catalog_negative_prompts": {"type": "string"},
     },
     required=["skill_md"],
     exposed_by_default=False,
@@ -1191,7 +1194,7 @@ async def meta_skill_activation_eval_run_tool(
     skill_md: str,
     positive_prompts: str = "",
     negative_prompts: str = "",
-    threshold: float = 0.8,
+    catalog_negative_prompts: str = "",
 ) -> str:
     import asyncio
 
@@ -1200,7 +1203,7 @@ async def meta_skill_activation_eval_run_tool(
         skill_md,
         positive_prompts,
         negative_prompts,
-        threshold,
+        catalog_negative_prompts,
     )
 
 

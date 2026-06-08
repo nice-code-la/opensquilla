@@ -615,9 +615,16 @@ def test_creator_quality_and_activation_tools_registered() -> None:
 
     from opensquilla.tools.registry import get_default_registry
 
-    names = set(get_default_registry().list_names())
+    reg = get_default_registry()
+    names = set(reg.list_names())
     assert "meta_skill_generation_quality_run" in names
     assert "meta_skill_activation_eval_run" in names
+
+    activation_tool = reg.get("meta_skill_activation_eval_run")
+    assert activation_tool is not None
+    assert activation_tool.spec.exposed_by_default is False
+    assert "catalog_negative_prompts" in activation_tool.spec.parameters
+    assert "threshold" not in activation_tool.spec.parameters
 
 
 def test_generation_quality_tool_returns_utf8_json_string() -> None:
@@ -659,7 +666,7 @@ def test_generation_quality_tool_returns_utf8_json_string() -> None:
     assert payload["passed"] is True
 
 
-def test_activation_eval_tool_accepts_json_arrays_and_newline_prompts() -> None:
+def test_activation_eval_tool_uses_catalog_negative_prompts(monkeypatch) -> None:
     from opensquilla.skills.creator import proposer
 
     skill_md = """---
@@ -677,17 +684,107 @@ composition:
         text: "{{ inputs.user_message }}"
 ---
 """
+    captured: dict[str, object] = {}
+
+    def stub_evaluator(
+        skill_markdown,
+        positive_prompts,
+        negative_prompts,
+        *,
+        threshold,
+    ):
+        captured["skill_markdown"] = skill_markdown
+        captured["positive_prompts"] = positive_prompts
+        captured["negative_prompts"] = negative_prompts
+        captured["threshold"] = threshold
+        return {
+            "required": True,
+            "passed": True,
+            "reason": "ok",
+            "true_positive_rate": 1.0,
+            "false_positive_count": 0,
+            "cases": [],
+            "issues": [],
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(proposer, "evaluate_candidate_activation", stub_evaluator)
 
     result = proposer.meta_skill_activation_eval_run(
         skill_md=skill_md,
         positive_prompts=json.dumps(["please run the alpha report"]),
-        negative_prompts="please run the beta digest\nplease summarize this note",
+        catalog_negative_prompts="please run the beta digest\nplease summarize this note",
         threshold=0.8,
     )
 
     payload = json.loads(result)
     assert payload["passed"] is True
-    assert payload["true_positive_rate"] == 1.0
+    assert captured == {
+        "skill_markdown": skill_md,
+        "positive_prompts": ["please run the alpha report"],
+        "negative_prompts": [
+            "please run the beta digest",
+            "please summarize this note",
+        ],
+        "threshold": 0.8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_activation_eval_tool_wrapper_accepts_catalog_negative_prompts(
+    monkeypatch,
+) -> None:
+    import asyncio
+
+    from opensquilla.skills.creator import proposer
+
+    skill_md = """---
+name: synth-alpha-report
+description: "Synthetic alpha report workflow."
+kind: meta
+meta_priority: 50
+triggers:
+  - "alpha report"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+    captured: dict[str, object] = {}
+
+    async def fake_to_thread(func, *args, **kwargs):
+        captured["func"] = func
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", fake_to_thread)
+
+    result = await proposer.meta_skill_activation_eval_run_tool(
+        skill_md=skill_md,
+        positive_prompts=json.dumps(["please run the alpha report"]),
+        catalog_negative_prompts=json.dumps([
+            "please run the beta digest",
+            "please summarize this note",
+        ]),
+    )
+
+    payload = json.loads(result)
+    assert payload["passed"] is True
+    assert captured["func"] is proposer.meta_skill_activation_eval_run
+    assert captured["args"] == (
+        skill_md,
+        json.dumps(["please run the alpha report"]),
+        "",
+        json.dumps([
+            "please run the beta digest",
+            "please summarize this note",
+        ]),
+    )
+    assert captured["kwargs"] == {}
     assert [case["kind"] for case in payload["cases"]] == [
         "positive",
         "negative",
