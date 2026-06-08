@@ -12,6 +12,10 @@ from opensquilla.skills.meta.plan_serde import from_jsonable
 from opensquilla.skills.meta.types import MetaPlan
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+_SECRET_LITERAL_RE = re.compile(
+    r"(?i)\b(?:sk|pk|ghp|gho|ghu|ghs|ghr|xoxb|xoxp)-[A-Za-z0-9_\-]{8,}\b"
+)
+_FILE_PATH_RE = re.compile(r"(?:/[A-Za-z0-9._\- ]+){2,}\.[A-Za-z0-9]{1,8}")
 
 
 def draft_meta_skill_seed(
@@ -27,7 +31,11 @@ def draft_meta_skill_seed(
     """
     inputs = _json_obj(record.inputs_json)
     plan = _plan_from_record(record)
-    user_message = str(inputs.get("user_message") or inputs.get("message") or "").strip()
+    raw_user_message = str(inputs.get("user_message") or inputs.get("message") or "").strip()
+    user_message, privacy_warnings = _scrub_text(raw_user_message)
+    refusal_reason = _can_draft(record, user_message)
+    if refusal_reason:
+        return _cannot_draft(record, refusal_reason)
     goal = _seed_goal(record, plan, user_message)
     trigger_candidates = _trigger_candidates(record.meta_skill_name, user_message)
     request_template = dict(plan.request_template) if plan else {}
@@ -52,12 +60,9 @@ def draft_meta_skill_seed(
     return {
         "status": "ok",
         **normalized,
+        **({"privacy_warnings": privacy_warnings} if privacy_warnings else {}),
         "creator_input": creator_input,
-        "source_run": {
-            "run_id": record.run_id,
-            "meta_skill_name": record.meta_skill_name,
-            "status": record.status,
-        },
+        "source_run": _source_run(record),
         "name": f"{_slug(record.meta_skill_name)}-draft",
         "description": _draft_description(record, user_message),
         "trigger_candidates": trigger_candidates,
@@ -100,6 +105,44 @@ def _plan_from_record(record: RunRecord) -> MetaPlan | None:
         return from_jsonable(payload)
     except Exception:  # noqa: BLE001 - authoring must fail open
         return None
+
+
+def _can_draft(record: RunRecord, scrubbed_user_message: str) -> str | None:
+    if record.status != "ok":
+        return "run_not_successful"
+    if not scrubbed_user_message and not (record.final_text or "").strip():
+        return "missing_goal_or_output"
+    if not record.steps:
+        return "missing_observed_steps"
+    return None
+
+
+def _cannot_draft(record: RunRecord, reason: str) -> dict[str, Any]:
+    return {
+        "status": "cannot_draft",
+        "reason": reason,
+        "source_kind": "meta_run",
+        "source_run": _source_run(record),
+    }
+
+
+def _source_run(record: RunRecord) -> dict[str, Any]:
+    return {
+        "run_id": record.run_id,
+        "meta_skill_name": record.meta_skill_name,
+        "status": record.status,
+    }
+
+
+def _scrub_text(value: str) -> tuple[str, list[str]]:
+    warnings: list[str] = []
+    scrubbed = _SECRET_LITERAL_RE.sub("[secret]", value)
+    if scrubbed != value:
+        warnings.append("secret_like_text_redacted")
+    with_files = _FILE_PATH_RE.sub("[file]", scrubbed)
+    if with_files != scrubbed:
+        warnings.append("file_path_redacted")
+    return with_files.strip(), warnings
 
 
 def _normalized_seed(

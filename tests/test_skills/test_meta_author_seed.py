@@ -110,3 +110,30 @@ def test_author_seed_preserves_legacy_keys() -> None:
     assert seed["request_template"]["outcome"] == "Decision brief"
     assert seed["output_contract"]["required_sections"] == ["Recommendation", "Evidence"]
     assert seed["composition"]["steps"][0]["id"] == "search"
+
+
+def test_author_seed_refuses_failed_or_empty_trace() -> None:
+    failed = draft_meta_skill_seed(_record(status="failed", final_text=None))
+    assert failed["status"] == "cannot_draft"
+    assert failed["reason"] == "run_not_successful"
+    assert "creator_input" not in failed
+
+    empty = draft_meta_skill_seed(_record(user_message="", final_text=""))
+    assert empty["status"] == "cannot_draft"
+    assert empty["reason"] == "missing_goal_or_output"
+
+
+def test_author_seed_scrubs_secret_and_file_like_literals() -> None:
+    seed = draft_meta_skill_seed(_record(
+        user_message=(
+            "Use API key sk-live-1234567890abcdef and summarize "
+            "/home/alice/private/customer_contract.pdf for finance."
+        )
+    ))
+
+    payload = json.dumps(seed, ensure_ascii=False)
+    assert "sk-live" not in payload
+    assert "/home/alice/private" not in payload
+    assert "[secret]" in payload
+    assert "[file]" in payload
+    assert seed["privacy_warnings"] == ["secret_like_text_redacted", "file_path_redacted"]
