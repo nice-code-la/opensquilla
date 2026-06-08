@@ -855,6 +855,8 @@ def meta_skill_persist_proposal(
     runtime_e2e_result: str = "",
     collision_result: str = "",
     risk_result: str = "",
+    generation_quality_result: str = "",
+    activation_result: str = "",
     auto_enable_manual: bool = True,
 ) -> str:
     """Write a proposal candidate to ~/.opensquilla/proposals/<id>/. Returns JSON."""
@@ -868,7 +870,9 @@ def meta_skill_persist_proposal(
             "--acceptance-result", acceptance_result,
             "--runtime-e2e-result", runtime_e2e_result,
             "--collision-result", collision_result,
-            "--risk-result", risk_result]
+            "--risk-result", risk_result,
+            "--generation-quality-result", generation_quality_result,
+            "--activation-result", activation_result]
     if home:
         args.extend(["--home", home])
     proc = subprocess.run(args, capture_output=True, text=True, check=False)
@@ -1122,6 +1126,8 @@ async def meta_skill_runtime_e2e_run_tool(
         "runtime_e2e_result": {"type": "string"},
         "collision_result": {"type": "string"},
         "risk_result": {"type": "string"},
+        "generation_quality_result": {"type": "string"},
+        "activation_result": {"type": "string"},
         "auto_enable_manual": {"type": "boolean"},
         "home": {"type": "string"},
     },
@@ -1138,6 +1144,8 @@ async def meta_skill_persist_proposal_tool(
     runtime_e2e_result: str = "",
     collision_result: str = "",
     risk_result: str = "",
+    generation_quality_result: str = "",
+    activation_result: str = "",
     auto_enable_manual: bool = True,
 ) -> str:
     import asyncio
@@ -1152,6 +1160,8 @@ async def meta_skill_persist_proposal_tool(
         runtime_e2e_result=runtime_e2e_result,
         collision_result=collision_result,
         risk_result=risk_result,
+        generation_quality_result=generation_quality_result,
+        activation_result=activation_result,
         auto_enable_manual=auto_enable_manual,
     )
 

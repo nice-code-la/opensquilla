@@ -296,6 +296,29 @@ composition:
         pattern_id: "{{ outputs.pick_pattern }}"
         slots_json: "{{ outputs.fill_slots }}"
 
+    - id: generation_quality
+      label: "生成质量"
+      label_en: "Generation quality"
+      kind: tool_call
+      depends_on: [fill_slots]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      tool: meta_skill_generation_quality_run
+      tool_args:
+        pattern_id: "{{ outputs.pick_pattern }}"
+        slots_json: "{{ outputs.fill_slots }}"
+
+    - id: activation_eval
+      label: "触发评测"
+      label_en: "Activation evaluation"
+      kind: tool_call
+      depends_on: [assemble]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      tool: meta_skill_activation_eval_run
+      tool_args:
+        skill_md: "{{ outputs.assemble }}"
+        positive_prompts: ""
+        catalog_negative_prompts: ""
+
     - id: collision_check
       label: "冲突检查"
       label_en: "Conflict check"
@@ -403,7 +426,7 @@ composition:
       label: "验收对比"
       label_en: "Acceptance comparison"
       kind: llm_chat
-      depends_on: [assemble, single_model_baseline]
+      depends_on: [assemble, single_model_baseline, generation_quality, activation_eval]
       when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'FULL_GATED'"
       with:
         system: |
@@ -422,6 +445,12 @@ composition:
 
           Orchestrated candidate:
           {{ outputs.assemble | truncate(7000) }}
+
+          Generation quality:
+          {{ outputs.generation_quality | truncate(2000) }}
+
+          Activation eval:
+          {{ outputs.activation_eval | truncate(2000) }}
 
           Single-model baseline:
           {{ outputs.single_model_baseline | truncate(7000) }}
@@ -482,7 +511,7 @@ composition:
       label: "预览"
       label_en: "Preview"
       kind: llm_chat
-      depends_on: [smoke, acceptance_compare, runtime_e2e]
+      depends_on: [smoke, acceptance_compare, runtime_e2e, generation_quality, activation_eval]
       when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
       with:
         system: |
@@ -492,12 +521,19 @@ composition:
         task: |
           Produce a concise proposal preview for the user/operator before
           persistence. Include proposed name, triggers, DAG summary, collision
-          result, risk classification, lint status, smoke status, baseline
-          comparison status, and whether it appears eligible for acceptance.
+          result, generation-quality summary, activation-eval summary, risk
+          classification, lint status, smoke status, baseline comparison
+          status, and whether it appears eligible for acceptance.
           Do not invent paths or proposal IDs.
 
           Candidate SKILL.md:
           {{ outputs.assemble | truncate(8000) }}
+
+          Generation quality:
+          {{ outputs.generation_quality | truncate(2000) }}
+
+          Activation eval:
+          {{ outputs.activation_eval | truncate(2000) }}
 
           Collision check:
           {{ outputs.collision_check | truncate(1200) }}
@@ -524,7 +560,7 @@ composition:
       label: "保存"
       label_en: "Save"
       kind: tool_call
-      depends_on: [preview]
+      depends_on: [preview, assemble, generation_quality, activation_eval]
       when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY'"
       tool: meta_skill_persist_proposal
       tool_args:
@@ -536,6 +572,8 @@ composition:
         runtime_e2e_result: "{{ outputs.runtime_e2e }}"
         collision_result: "{{ outputs.collision_check }}"
         risk_result: "{{ outputs.risk_classify }}"
+        generation_quality_result: "{{ outputs.generation_quality }}"
+        activation_result: "{{ outputs.activation_eval }}"
 
     - id: final_response
       label: "最终回复"

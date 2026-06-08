@@ -213,6 +213,61 @@ def test_creator_runtime_e2e_uses_candidate_trigger_prompt(tmp_path) -> None:
     assert runtime_e2e.tool_args["eval_prompts"] == ""
 
 
+def test_creator_dag_runs_generation_quality_and_activation_before_persist(tmp_path) -> None:
+    loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
+    loader.invalidate_cache()
+    creator_spec = loader.get_by_name("meta-skill-creator")
+    assert creator_spec is not None
+    plan = parse_meta_plan(creator_spec)
+    assert plan is not None
+
+    steps = {step.id: step for step in plan.steps}
+    assert "generation_quality" in steps
+    assert "activation_eval" in steps
+
+    generation_quality = steps["generation_quality"]
+    assert list(generation_quality.depends_on) == ["fill_slots"]
+    assert generation_quality.tool == "meta_skill_generation_quality_run"
+    assert generation_quality.tool_args == {
+        "pattern_id": "{{ outputs.pick_pattern }}",
+        "slots_json": "{{ outputs.fill_slots }}",
+    }
+
+    activation_eval = steps["activation_eval"]
+    assert list(activation_eval.depends_on) == ["assemble"]
+    assert activation_eval.tool == "meta_skill_activation_eval_run"
+    assert activation_eval.tool_args == {
+        "skill_md": "{{ outputs.assemble }}",
+        "positive_prompts": "",
+        "catalog_negative_prompts": "",
+    }
+
+    persist = steps["persist"]
+    assert list(persist.depends_on) == [
+        "preview",
+        "assemble",
+        "generation_quality",
+        "activation_eval",
+    ]
+    assert persist.tool_args["generation_quality_result"] == "{{ outputs.generation_quality }}"
+    assert persist.tool_args["activation_result"] == "{{ outputs.activation_eval }}"
+
+    preview_task = str(steps["preview"].with_args["task"])
+    assert "Generation quality:" in preview_task
+    assert "Activation eval:" in preview_task
+
+    acceptance_compare = steps["acceptance_compare"]
+    assert list(acceptance_compare.depends_on) == [
+        "assemble",
+        "single_model_baseline",
+        "generation_quality",
+        "activation_eval",
+    ]
+    acceptance_task = str(acceptance_compare.with_args["task"])
+    assert "Generation quality:" in acceptance_task
+    assert "Activation eval:" in acceptance_task
+
+
 def test_manual_creator_persist_auto_enables_when_setting_is_on(tmp_path) -> None:
     """The manual meta-skill-creator persist tool should use the same
     conservative auto-enable path as cron/dream auto-propose when the

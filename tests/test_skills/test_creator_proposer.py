@@ -809,3 +809,38 @@ triggers:
     assert payload["passed"] is False
     assert "missing_positive_prompts" in payload["issues"]
     assert "missing_negative_prompts" in payload["issues"]
+
+
+def test_persist_proposal_forwards_generation_quality_and_activation_results(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from opensquilla.skills.creator import proposer
+
+    captured: dict[str, object] = {}
+
+    def fake_run(args, *, capture_output, text, check):
+        captured["args"] = args
+        captured["capture_output"] = capture_output
+        captured["text"] = text
+        captured["check"] = check
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "ok", "proposal_id": "proposal-1"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(proposer.subprocess, "run", fake_run)
+
+    out = json.loads(proposer.meta_skill_persist_proposal(
+        skill_md="---\nname: synth-test\n---\n",
+        lint_result='{"G1": {"passed": true}}',
+        smoke_result='{"G3": {"passed": true}}',
+        generation_quality_result='{"passed": true}',
+        activation_result='{"passed": true}',
+    ))
+
+    assert out["proposal_id"] == "proposal-1"
+    args = captured["args"]
+    assert isinstance(args, list)
+    assert args[args.index("--generation-quality-result") + 1] == '{"passed": true}'
+    assert args[args.index("--activation-result") + 1] == '{"passed": true}'
