@@ -35,14 +35,18 @@ requirements, and hub/tap distribution metadata.
    truth for installable workflows.
 2. Add a lightweight author entry that can turn a successful conversation,
    MetaSkill run, or run summary into a proposal draft.
-3. Support small proposal improvements through patch/edit flows instead of
+3. Measure activation quality with explicit positive and negative prompts before
+   relying on a generated trigger or description.
+4. Support small proposal improvements through patch/edit flows instead of
    forcing full regeneration.
-4. Add a lightweight bundle/profile layer for repeated skill combinations that
+5. Add a lightweight bundle/profile layer for repeated skill combinations that
    do not need a DAG.
-5. Extend existing conditional visibility metadata so skills and MetaSkills only
+6. Extend existing conditional visibility metadata so skills and MetaSkills only
    surface when their tool and platform requirements can be satisfied.
-6. Add evaluation and benchmark loops for creator output quality, using
+7. Add evaluation and benchmark loops for creator output quality, using
    existing `eval_prompts`, `output_contract`, and runtime E2E infrastructure.
+8. Support lifecycle controls for versioning, supersession, deprecation, and
+   one-command rollback of promoted proposals.
 
 ## Non-Goals
 
@@ -93,6 +97,26 @@ Extend creator modes conceptually:
 The first three modes already exist. `PATCH_PROPOSAL` and `BENCHMARK` should
 reuse the same proposal store and gate result shape.
 
+### Layer 2A: Activation Eval-Benchmark
+
+Treat the generated name, description, triggers, and negative-space clauses as
+first-class artifacts. Before a proposal is accepted or benchmarked, evaluate
+whether it activates for intended prompts and stays silent for neighboring
+prompts.
+
+Each candidate should carry or derive:
+
+- `trigger_when`: examples and compact rules for when the workflow should fire;
+- `skip_when`: examples and compact rules for adjacent cases it must not steal;
+- positive activation prompts;
+- negative activation prompts;
+- activation accuracy summary with variance across prompt variants.
+
+This pass is separate from runtime logic E2E. A candidate can have correct DAG
+logic and still be unsafe if its description or triggers misroute user intent.
+Description optimization should iterate only the activation surface. Logic
+optimization should iterate the DAG, step inputs, output contract, and gates.
+
 ### Layer 3: Proposal Patch/Edit
 
 Proposal editing should operate on pending proposals, not installed bundled
@@ -107,6 +131,14 @@ skills. The patch flow:
 Patch requests should prefer small changes: trigger refinement, step wording,
 metadata additions, output contract adjustment, eval prompt additions, or
 dependency correction.
+
+Proposal revisions should preserve lineage:
+
+- parent proposal id or revision id;
+- semantic version or monotonically increasing revision number;
+- owner/source of the change;
+- supersedes/deprecates metadata when replacing an accepted skill;
+- rollback target when a promoted revision regresses.
 
 ### Layer 4: Skill Bundles
 
@@ -170,9 +202,27 @@ Creator output should be evaluated through explicit prompts and contracts:
 - `output_contract` defines required final sections and artifacts.
 - runtime E2E compares candidate MetaSkill output against a no-meta baseline.
 - benchmark mode compares proposal revision A/B outputs over the same prompts.
+- continuous drift audits rerun activation and runtime checks after model
+  upgrades, tool/API changes, and new sibling skills.
+- trigger-collision audits rerun when any new skill or MetaSkill lands, because
+  a later proposal can poach intent from an older one.
 
 This borrows Claude's create/eval/improve/benchmark lifecycle while keeping
 OpenSquilla's proposal gates.
+
+### Layer 7: Procedural Memory Feedback
+
+Successful trajectories and user corrections should feed future proposal drafts
+without automatically installing anything.
+
+- Repeated successful ad-hoc trajectories become draft seeds after a frequency
+  threshold.
+- User corrections become local guardrails for the affected proposal and can be
+  suggested for sibling bundles or related MetaSkills.
+- Correction propagation stays reviewable: it creates patch suggestions or
+  benchmark cases, not direct edits to installed skills.
+- A future router MetaSkill may become useful once the retained catalog grows
+  enough that retrieval and trigger collision become the bottleneck.
 
 ## Data Flow
 
@@ -182,9 +232,10 @@ OpenSquilla's proposal gates.
 2. Draft seed helper summarizes the observed workflow.
 3. `meta-skill-creator` receives the seed as structured intent.
 4. Existing slot filling and assembly produce a candidate.
-5. Existing gates run according to creator mode.
-6. User reviews preview or pending proposal.
-7. Accept flow promotes only eligible proposals unless force is explicit.
+5. Activation eval checks positive and negative trigger behavior.
+6. Existing gates run according to creator mode.
+7. User reviews preview or pending proposal.
+8. Accept flow promotes only eligible proposals unless force is explicit.
 
 ### Proposal Patch
 
@@ -212,42 +263,58 @@ OpenSquilla's proposal gates.
   requirement in CLI/WebUI.
 - If benchmark prompts are missing, generate only a preview and mark benchmark
   unavailable.
+- If activation prompts are missing, derive a minimal positive/negative set from
+  `trigger_when`, `skip_when`, and candidate triggers before persistence.
 - If runtime E2E context is unavailable, persist only as an ineligible proposal
   with the failure reason preserved.
 - If a bundle attempts to express step dependencies, recommend conversion to a
   MetaSkill rather than adding hidden DAG semantics to bundles.
+- If a promoted proposal regresses, rollback disables the promoted revision and
+  restores the previous accepted version or pending proposal state.
 
 ## Testing Strategy
 
 1. Parser and loader tests preserve new metadata fields.
 2. Draft seed tests convert run summaries into deterministic seed payloads.
-3. Creator DAG tests verify seed payloads reach slot filling without losing raw
+3. Activation eval tests cover positive, negative, neighboring-domain, and
+   variance cases for generated descriptions and triggers.
+4. Creator DAG tests verify seed payloads reach slot filling without losing raw
    user constraints.
-4. Proposal patch tests verify revisions preserve lineage and rerun gates.
-5. Bundle tests verify model-visible summaries and CLI/WebUI listing behavior.
-6. Conditional visibility tests cover satisfied, missing, and fallback cases.
-7. Benchmark tests compare two proposal revisions over fixed eval prompts.
-8. Regression tests ensure existing `PREVIEW_ONLY`, `PERSISTED_PROPOSAL`, and
+5. Proposal patch tests verify revisions preserve lineage and rerun gates.
+6. Bundle tests verify model-visible summaries and CLI/WebUI listing behavior.
+7. Conditional visibility tests cover satisfied, missing, and fallback cases.
+8. Benchmark tests compare two proposal revisions over fixed eval prompts.
+9. Drift tests rerun activation/collision checks after adding a sibling skill.
+10. Rollback tests disable a promoted revision and restore previous behavior.
+11. Regression tests ensure existing `PREVIEW_ONLY`, `PERSISTED_PROPOSAL`, and
    `FULL_GATED` behavior remains unchanged.
 
 ## Rollout Plan
 
-### P0: Author Entry
+### P0: Activation Measurement
+
+Implement activation eval-benchmark for generated descriptions, triggers,
+`trigger_when`, and `skip_when`. This is the first slice because a candidate that
+misfires should not proceed to heavier authoring automation.
+
+### P1: Author Entry
 
 Implement draft seeds from run summaries and conversations. Feed seeds into the
 existing creator DAG. Do not add new proposal mutation or bundle behavior yet.
 
-### P1: Proposal Iteration
+### P2: Proposal Iteration
 
 Add patch/edit proposal revisions, benchmark mode, and eval-prompt reuse. Keep
-promotion rules unchanged.
+promotion rules unchanged. Add revision lineage, supersession, and rollback
+metadata before enabling installed-skill patch flows.
 
-### P2: Lightweight Workflow Profiles
+### P3: Continuous Quality and Lightweight Workflow Profiles
 
-Add skill bundles and conditional visibility metadata. Start with CLI/WebUI
-visibility and prompt-injection behavior before any automatic routing changes.
+Add continuous trigger-collision audits, drift checks, skill bundles, and
+conditional visibility metadata. Start with CLI/WebUI visibility and
+prompt-injection behavior before any automatic routing changes.
 
-### P3: Learning Loop
+### P4: Learning Loop
 
 Use repeated successful patterns, user corrections, and benchmark results to
 suggest proposal drafts or revisions. Suggestions remain reviewable proposals,
@@ -257,11 +324,14 @@ not automatic installed skills.
 
 - A successful run can become a reviewable MetaSkill draft without manual YAML
   authoring.
+- Generated triggers and descriptions have measured positive and negative
+  activation behavior before acceptance.
 - Pending proposals can be improved through bounded patches.
 - Users can represent repeated skill co-loading as bundles without building a
   full MetaSkill.
 - Auto-enable remains at least as conservative as today.
 - Creator quality can be compared over eval prompts before promotion.
+- A promoted skill can be rolled back without manually editing files.
 - Missing tools or platform requirements are visible before invocation.
 
 ## Risks and Mitigations
@@ -278,6 +348,12 @@ not automatic installed skills.
   hard suppression.
 - Risk: benchmark mode increases cost.
   Mitigation: make benchmark opt-in and reuse small eval prompt sets first.
+- Risk: trigger text improves while DAG logic regresses.
+  Mitigation: keep activation optimization and runtime logic optimization as
+  separate passes with separate gates.
+- Risk: corrections over-propagate into unrelated workflows.
+  Mitigation: propagate corrections as suggestions and benchmark cases, not
+  automatic edits.
 
 ## Evidence Anchors
 
