@@ -248,6 +248,36 @@ def test_author_seed_duplicate_tie_uses_normalized_name() -> None:
     assert seed["duplicate_detection"]["target"] == "meta-a-vendor-brief"
 
 
+def test_author_seed_allows_generic_vendor_overlap() -> None:
+    seed = draft_meta_skill_seed(
+        _record(user_message="Review vendor risk controls."),
+        existing_specs=[
+            _Spec(
+                "meta-vendor",
+                "vendor",
+                ["vendor"],
+            )
+        ],
+    )
+
+    assert seed["duplicate_detection"]["suggested_action"] == "create_new"
+
+
+def test_author_seed_allows_generic_science_overlap() -> None:
+    seed = draft_meta_skill_seed(
+        _record(user_message="Plan a school science fair project."),
+        existing_specs=[
+            _Spec(
+                "meta-science",
+                "science",
+                ["science"],
+            )
+        ],
+    )
+
+    assert seed["duplicate_detection"]["suggested_action"] == "create_new"
+
+
 def test_author_seed_allows_distinct_seed() -> None:
     seed = draft_meta_skill_seed(
         _record(user_message="Plan a school science fair project."),

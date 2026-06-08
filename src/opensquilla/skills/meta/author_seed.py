@@ -183,16 +183,24 @@ def _exact_phrase_score(left_parts: Iterable[str], right_parts: Iterable[str]) -
     left = [_normalize_phrase(part) for part in left_parts]
     right = [_normalize_phrase(part) for part in right_parts]
     for left_part in left:
-        if len(left_part) < 3:
+        if not _strong_phrase(left_part):
             continue
         for right_part in right:
-            if len(right_part) >= 3 and (left_part in right_part or right_part in left_part):
+            if _strong_phrase(right_part) and (
+                left_part in right_part or right_part in left_part
+            ):
                 return 1.0
     return 0.0
 
 
 def _normalize_phrase(value: str) -> str:
     return " ".join(_TOKEN_RE.findall(value.casefold()))
+
+
+def _strong_phrase(value: str) -> bool:
+    if any(ord(char) > 127 for char in value):
+        return len(value.replace(" ", "")) >= 4
+    return len(value.split()) >= 2 and len(value) >= 8
 
 
 def _jaccard(left: set[str], right: set[str]) -> float:
