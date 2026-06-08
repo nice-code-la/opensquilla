@@ -529,3 +529,32 @@ async def test_fill_slots_tool_validation_error_returns_structured_json(monkeypa
         f"Fix #B: pattern_id missing from error payload: {payload}"
     )
     assert "detail" in payload, f"Fix #B: 'detail' key missing from error payload: {payload}"
+
+
+def test_sequential_slots_accept_generation_rationale() -> None:
+    slots = SequentialSlots(
+        name="test-rationale",
+        description="Synthetic pipeline with explicit generation rationale.",
+        triggers=["rationale trigger"],
+        steps=[
+            {"id": "a", "skill": "summarize", "task": "process input"},
+            {"id": "b", "skill": "memory", "task": "save result"},
+        ],
+        generation_rationale={
+            "intent": "Turn source material into a saved summary.",
+            "target_outcome": "The user gets a concise summary and durable memory entry.",
+            "stop_condition": "Summary saved and final response reports completion evidence.",
+            "selected_shape": "metaskill",
+            "selected_pattern": "p1_sequential",
+            "source_evidence": ["user asked for process then save"],
+            "filled_slots": ["name", "description", "triggers", "steps"],
+            "unresolved_assumptions": [],
+            "rejected_alternatives": [
+                "ordinary_skill: requires two existing skills in sequence",
+            ],
+            "output_contract_summary": "Final answer reports summary and save status.",
+        },
+    )
+
+    assert slots.generation_rationale.selected_shape == "metaskill"
+    assert slots.generation_rationale.selected_pattern == "p1_sequential"

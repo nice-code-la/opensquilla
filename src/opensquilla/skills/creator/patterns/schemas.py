@@ -18,6 +18,46 @@ def _check_yaml_safe(v: str, field_name: str) -> str:
     return v
 
 
+class GenerationRationale(BaseModel):
+    intent: str = Field(min_length=10, max_length=400)
+    target_outcome: str = Field(min_length=10, max_length=400)
+    stop_condition: str = Field(min_length=10, max_length=400)
+    selected_shape: str = Field(pattern=r"^(ordinary_skill|metaskill|bundle|patch|refusal)$")
+    selected_pattern: str = Field(min_length=2, max_length=80)
+    source_evidence: list[str] = Field(min_length=1, max_length=8)
+    filled_slots: list[str] = Field(min_length=1, max_length=16)
+    unresolved_assumptions: list[str] = Field(default_factory=list, max_length=8)
+    rejected_alternatives: list[str] = Field(min_length=1, max_length=8)
+    output_contract_summary: str = Field(min_length=10, max_length=500)
+
+    @field_validator(
+        "intent",
+        "target_outcome",
+        "stop_condition",
+        "selected_shape",
+        "selected_pattern",
+        "output_contract_summary",
+    )
+    @classmethod
+    def _scalar_yaml_safe(cls, v: str) -> str:
+        return _check_yaml_safe(v, "generation_rationale scalar")
+
+    @field_validator(
+        "source_evidence",
+        "filled_slots",
+        "unresolved_assumptions",
+        "rejected_alternatives",
+        mode="before",
+    )
+    @classmethod
+    def _list_items_yaml_safe(cls, v: object) -> object:
+        if isinstance(v, list):
+            for item in v:
+                if isinstance(item, str):
+                    _check_yaml_safe(item, "generation_rationale item")
+        return v
+
+
 class SequentialStep(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,30}$")
     skill: str
@@ -45,6 +85,7 @@ class SequentialSlots(BaseModel):
     meta_priority: int = Field(ge=30, le=80, default=50)
     triggers: list[str] = Field(min_length=1, max_length=8)
     steps: list[SequentialStep] = Field(min_length=2, max_length=5)
+    generation_rationale: GenerationRationale | None = None
 
     @field_validator("description")
     @classmethod
@@ -107,6 +148,7 @@ class FanOutMergeSlots(BaseModel):
     branches: list[FanOutBranch] = Field(min_length=2, max_length=4)
     merge: FanOutBranch
     tail: FanOutTail | None = None
+    generation_rationale: GenerationRationale | None = None
 
     @field_validator("description")
     @classmethod
