@@ -124,6 +124,13 @@ composition:
           Outer system / activation context:
           {{ inputs.system_prompt | default("") | xml_escape | truncate(1200) }}
 
+          Optional draft seed JSON:
+          {{ inputs.draft_seed_json | default("") | xml_escape | truncate(2000) }}
+
+          If draft seed JSON is present and coherent, classify as ROUTE:
+          meta-skill unless the seed explicitly refuses drafting. Preserve its
+          goal, observed steps, constraints, and negative cases.
+
           Return:
           ROUTE: <normal-skill|meta-skill>
           WORKFLOW_GOAL: <goal or unclear>
@@ -268,6 +275,9 @@ composition:
           Clarified intent:
           {{ outputs.clarify_intent | truncate(1000) }}
 
+          Draft seed JSON, if supplied:
+          {{ inputs.draft_seed_json | default("") | truncate(2000) }}
+
     - id: fill_slots
       label: "填充槽位"
       label_en: "Fill slots"
@@ -278,6 +288,7 @@ composition:
       tool_args:
         pattern_id: "{{ outputs.pick_pattern }}"
         history_summary: "{{ outputs.harvest | truncate(2000) }}"
+        draft_seed_json: "{{ inputs.draft_seed_json | default('') }}"
         user_intent: |
           Raw user request:
           {{ inputs.user_message | xml_escape | truncate(1200) }}
