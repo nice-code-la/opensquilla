@@ -12,7 +12,7 @@ from opensquilla.skills.meta.plan_serde import from_jsonable
 from opensquilla.skills.meta.types import MetaPlan
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
-_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 _SECRET_LITERAL_RE = re.compile(
     r"(?i)\b(?:sk|pk|ghp|gho|ghu|ghs|ghr|xoxb|xoxp)[_-][A-Za-z0-9_\-]{8,}\b"
 )
@@ -128,16 +128,20 @@ def _detect_duplicate(
     *,
     existing_specs: Iterable[Any],
 ) -> dict[str, Any]:
-    source_tokens = _tokens_from_parts([goal, *trigger_candidates])
+    source_parts = [goal, *trigger_candidates]
+    source_tokens = _tokens_from_parts(source_parts)
     best_name: str | None = None
     best_score = 0.0
-    for spec in existing_specs:
+    for spec in sorted(existing_specs, key=_spec_sort_key):
         spec_parts = [
             str(getattr(spec, "name", "")),
             str(getattr(spec, "description", "")),
             *[str(trigger) for trigger in getattr(spec, "triggers", []) or []],
         ]
-        score = _jaccard(source_tokens, _tokens_from_parts(spec_parts))
+        score = max(
+            _jaccard(source_tokens, _tokens_from_parts(spec_parts)),
+            _exact_phrase_score(source_parts, spec_parts),
+        )
         if score > best_score:
             best_score = score
             best_name = str(getattr(spec, "name", "")) or None
@@ -158,8 +162,37 @@ def _detect_duplicate(
 def _tokens_from_parts(parts: Iterable[str]) -> set[str]:
     tokens: set[str] = set()
     for part in parts:
-        tokens.update(_TOKEN_RE.findall(part.lower()))
+        for token in _TOKEN_RE.findall(part.casefold()):
+            tokens.add(token)
+            if any(ord(char) > 127 for char in token):
+                tokens.update(_char_ngrams(token))
     return tokens
+
+
+def _char_ngrams(value: str, *, size: int = 2) -> set[str]:
+    if len(value) <= size:
+        return {value}
+    return {value[index:index + size] for index in range(len(value) - size + 1)}
+
+
+def _spec_sort_key(spec: Any) -> str:
+    return str(getattr(spec, "name", "")).casefold()
+
+
+def _exact_phrase_score(left_parts: Iterable[str], right_parts: Iterable[str]) -> float:
+    left = [_normalize_phrase(part) for part in left_parts]
+    right = [_normalize_phrase(part) for part in right_parts]
+    for left_part in left:
+        if len(left_part) < 3:
+            continue
+        for right_part in right:
+            if len(right_part) >= 3 and (left_part in right_part or right_part in left_part):
+                return 1.0
+    return 0.0
+
+
+def _normalize_phrase(value: str) -> str:
+    return " ".join(_TOKEN_RE.findall(value.casefold()))
 
 
 def _jaccard(left: set[str], right: set[str]) -> float:

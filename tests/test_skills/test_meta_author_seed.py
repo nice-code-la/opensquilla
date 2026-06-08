@@ -210,6 +210,44 @@ def test_author_seed_recommends_patch_for_strong_duplicate() -> None:
     assert duplicate["score"] >= 0.75
 
 
+def test_author_seed_recommends_patch_for_non_ascii_duplicate() -> None:
+    seed = draft_meta_skill_seed(
+        _record(user_message="客户调研报告"),
+        existing_specs=[
+            _Spec(
+                "meta-customer-research-report",
+                "客户调研报告",
+                ["客户调研报告"],
+            )
+        ],
+    )
+
+    duplicate = seed["duplicate_detection"]
+    assert duplicate["suggested_action"] == "patch_existing"
+    assert duplicate["target"] == "meta-customer-research-report"
+    assert duplicate["score"] >= 0.75
+
+
+def test_author_seed_duplicate_tie_uses_normalized_name() -> None:
+    seed = draft_meta_skill_seed(
+        _record(user_message="Research a vendor and produce a decision brief."),
+        existing_specs=[
+            _Spec(
+                "meta-z-vendor-brief",
+                "Research a vendor and produce a decision brief.",
+                ["vendor decision brief"],
+            ),
+            _Spec(
+                "meta-a-vendor-brief",
+                "Research a vendor and produce a decision brief.",
+                ["vendor decision brief"],
+            ),
+        ],
+    )
+
+    assert seed["duplicate_detection"]["target"] == "meta-a-vendor-brief"
+
+
 def test_author_seed_allows_distinct_seed() -> None:
     seed = draft_meta_skill_seed(
         _record(user_message="Plan a school science fair project."),
