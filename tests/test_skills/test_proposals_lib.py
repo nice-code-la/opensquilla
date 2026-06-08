@@ -439,6 +439,27 @@ def test_write_proposal_rejects_non_boolean_creator_gate_passed_values(
     assert shown["gates"]["activation_eval"]["passed_raw"] == "true"
 
 
+def test_write_proposal_rejects_truthy_string_lint_and_smoke_passed_values(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        {"G1": {"passed": "false"}, "G2": {"passed": True}},
+        {"G3": {"passed": "false"}, "G4": {"passed": True}},
+        creator_mode="PERSISTED_PROPOSAL",
+        collision_result="PASS",
+        risk_result="RISK: low",
+        generation_quality_result={"required": True, "passed": True, "reason": "ok"},
+        activation_result={"required": True, "passed": True, "reason": "ok"},
+    )
+
+    assert result["auto_enable_eligible"] is False
+    accepted = proposals_lib.accept_proposal(home, result["proposal_id"])
+    assert accepted["status"] == "refused"
+
+
 def test_write_proposal_forces_creator_gate_required_in_required_mode(
     tmp_path: Path,
 ) -> None:

@@ -415,10 +415,10 @@ def write_proposal(
     # lands for human review.
     smoke_degraded = bool(smoke_result.get("degraded", False))
     gate_eligible = (
-        lint_result.get("G1", {}).get("passed", False)
-        and lint_result.get("G2", {}).get("passed", False)
-        and smoke_result.get("G3", {}).get("passed", False)
-        and smoke_result.get("G4", {}).get("passed", False)
+        lint_result.get("G1", {}).get("passed") is True
+        and lint_result.get("G2", {}).get("passed") is True
+        and smoke_result.get("G3", {}).get("passed") is True
+        and smoke_result.get("G4", {}).get("passed") is True
         and not smoke_degraded
     )
     eligible = (
