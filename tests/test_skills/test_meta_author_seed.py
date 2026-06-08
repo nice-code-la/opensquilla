@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from opensquilla.persistence.meta_run_writer import RunRecord, StepRecord
 from opensquilla.skills.meta.author_seed import draft_meta_skill_seed
@@ -121,6 +122,11 @@ def test_author_seed_refuses_failed_or_empty_trace() -> None:
     empty = draft_meta_skill_seed(_record(user_message="", final_text=""))
     assert empty["status"] == "cannot_draft"
     assert empty["reason"] == "missing_goal_or_output"
+
+    no_steps = draft_meta_skill_seed(replace(_record(), steps=()))
+    assert no_steps["status"] == "cannot_draft"
+    assert no_steps["reason"] == "missing_observed_steps"
+    assert "creator_input" not in no_steps
 
 
 def test_author_seed_scrubs_secret_and_file_like_literals() -> None:
