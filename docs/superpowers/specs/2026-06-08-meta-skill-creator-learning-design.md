@@ -39,8 +39,8 @@ requirements, and hub/tap distribution metadata.
    forcing full regeneration.
 4. Add a lightweight bundle/profile layer for repeated skill combinations that
    do not need a DAG.
-5. Add conditional visibility metadata so skills and MetaSkills only surface
-   when their tool and platform requirements can be satisfied.
+5. Extend existing conditional visibility metadata so skills and MetaSkills only
+   surface when their tool and platform requirements can be satisfied.
 6. Add evaluation and benchmark loops for creator output quality, using
    existing `eval_prompts`, `output_contract`, and runtime E2E infrastructure.
 
@@ -111,7 +111,10 @@ dependency correction.
 ### Layer 4: Skill Bundles
 
 Add a lightweight `kind: bundle` or separate bundle manifest for repeated
-combinations of skills that do not require runtime DAG orchestration.
+combinations of skills that do not require runtime DAG orchestration. The exact
+manifest shape should be chosen after a loader spike; if `kind: bundle` is used,
+the loader and parser must keep bundles separate from `kind: meta` plans so a
+bundle cannot be passed to the MetaSkill scheduler by mistake.
 
 Bundles should provide:
 
@@ -130,18 +133,27 @@ that need branching, validation gates, run history, or composed outputs.
 
 ### Layer 5: Conditional Visibility
 
-Add metadata fields that can be preserved by the loader and used by prompt
-injection, WebUI display, and proposal gates:
+OpenSquilla already parses conditional activation fields from
+`metadata.opensquilla`, including `requires_tools` and `fallback_for_toolsets`.
+This design extends that existing namespace instead of introducing a parallel
+manifest location.
+
+The target metadata shape is:
 
 ```yaml
 metadata:
   opensquilla:
     requires_tools: []
+    fallback_for_toolsets: []
     requires_toolsets: []
     fallback_for_tools: []
     platforms: []
     config_keys: []
 ```
+
+Initial implementation should reuse existing `requires_tools` and
+`fallback_for_toolsets` behavior first. New fields require parser, snapshot,
+serde, prompt-injection, CLI, and WebUI tests before they influence routing.
 
 The initial behavior should be conservative:
 
@@ -269,8 +281,8 @@ not automatic installed skills.
 
 ## Evidence Anchors
 
-- OpenSquilla already supports creator modes, proposal gates, runtime E2E, and
-  auto-enable eligibility.
+- OpenSquilla already supports creator modes, proposal gates, runtime E2E,
+  auto-enable eligibility, and a first slice of conditional activation metadata.
 - Claude Code contributes the skill/command unification, dynamic context,
   isolated skill execution, and create/eval/improve/benchmark lifecycle.
 - Hermes Agent contributes agent-managed skill patching, skill bundles,
