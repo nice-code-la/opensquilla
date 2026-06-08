@@ -22,6 +22,8 @@ from opensquilla.skills.creator.patterns import PATTERN_SLOT_SCHEMA
 from opensquilla.skills.loader import SkillLoader
 from opensquilla.tools.registry import tool
 
+from .activation import evaluate_candidate_activation
+from .quality import evaluate_generation_quality
 from .runtime_e2e import run_runtime_e2e_gate
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "patterns"
@@ -761,6 +763,39 @@ def reset_smoke_fixture_context(token) -> None:
 # Sync core implementations for lint / smoke / persist
 # ---------------------------------------------------------------------------
 
+def meta_skill_generation_quality_run(pattern_id: str, slots_json: str) -> str:
+    result = evaluate_generation_quality(pattern_id, slots_json)
+    return json.dumps(result, ensure_ascii=False)
+
+
+def meta_skill_activation_eval_run(
+    skill_md: str,
+    positive_prompts: str = "",
+    negative_prompts: str = "",
+    threshold: float = 0.8,
+) -> str:
+    result = evaluate_candidate_activation(
+        skill_md,
+        positive_prompts=_json_array_or_lines(positive_prompts),
+        negative_prompts=_json_array_or_lines(negative_prompts),
+        threshold=threshold,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _json_array_or_lines(raw: str) -> list[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return [line.strip() for line in text.splitlines() if line.strip()]
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 def meta_skill_lint_run(skill_md: str, gates: str = "G1,G2") -> str:
     """Run skill-creator-linter on the given SKILL.md text. Returns JSON.
 
@@ -1119,6 +1154,54 @@ async def meta_skill_persist_proposal_tool(
 
 
 _PATTERN_ENUM = sorted(PATTERN_SLOT_SCHEMA.keys())
+
+
+@tool(
+    name="meta_skill_generation_quality_run",
+    description="Run deterministic generation-quality checks on creator slot JSON.",
+    params={
+        "pattern_id": {"type": "string", "enum": _PATTERN_ENUM},
+        "slots_json": {"type": "string"},
+    },
+    required=["pattern_id", "slots_json"],
+    exposed_by_default=False,
+)
+async def meta_skill_generation_quality_run_tool(
+    pattern_id: str,
+    slots_json: str,
+) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(meta_skill_generation_quality_run, pattern_id, slots_json)
+
+
+@tool(
+    name="meta_skill_activation_eval_run",
+    description="Run deterministic activation checks on a candidate SKILL.md.",
+    params={
+        "skill_md": {"type": "string"},
+        "positive_prompts": {"type": "string"},
+        "negative_prompts": {"type": "string"},
+        "threshold": {"type": "number"},
+    },
+    required=["skill_md"],
+    exposed_by_default=False,
+)
+async def meta_skill_activation_eval_run_tool(
+    skill_md: str,
+    positive_prompts: str = "",
+    negative_prompts: str = "",
+    threshold: float = 0.8,
+) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(
+        meta_skill_activation_eval_run,
+        skill_md,
+        positive_prompts,
+        negative_prompts,
+        threshold,
+    )
 
 
 @tool(

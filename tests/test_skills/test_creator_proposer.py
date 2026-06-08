@@ -604,3 +604,111 @@ def test_fill_slots_prompt_requires_generation_rationale(monkeypatch) -> None:
     assert "selected_shape" in prompt
     assert "rejected_alternatives" in prompt
     assert "Do not invent tools, gates, inputs, or output contracts" in prompt
+
+
+def test_creator_quality_and_activation_tools_registered() -> None:
+    import importlib
+
+    import opensquilla.skills.creator
+
+    importlib.reload(opensquilla.skills.creator)
+
+    from opensquilla.tools.registry import get_default_registry
+
+    names = set(get_default_registry().list_names())
+    assert "meta_skill_generation_quality_run" in names
+    assert "meta_skill_activation_eval_run" in names
+
+
+def test_generation_quality_tool_returns_utf8_json_string() -> None:
+    from opensquilla.skills.creator import proposer
+
+    slots = {
+        "name": "unicode-quality",
+        "description": "Synthetic pipeline that preserves non-ASCII trigger text.",
+        "meta_priority": 50,
+        "triggers": ["摘要流程"],
+        "steps": [
+            {"id": "a", "skill": "summarize", "task": "process input"},
+            {"id": "b", "skill": "memory", "task": "save result"},
+        ],
+        "generation_rationale": {
+            "intent": "Turn source material into a saved summary.",
+            "target_outcome": "The user gets a concise summary and durable memory entry.",
+            "stop_condition": "Summary saved and final response reports completion evidence.",
+            "selected_shape": "metaskill",
+            "selected_pattern": "p1_sequential",
+            "source_evidence": ["user asked for process then save"],
+            "filled_slots": ["name", "description", "triggers", "steps"],
+            "unresolved_assumptions": ["需要人工确认输入范围"],
+            "rejected_alternatives": [
+                "ordinary_skill: requires two existing skills in sequence",
+            ],
+            "output_contract_summary": "Final answer reports summary and save status.",
+        },
+    }
+
+    result = proposer.meta_skill_generation_quality_run(
+        "p1_sequential",
+        json.dumps(slots, ensure_ascii=False),
+    )
+
+    assert isinstance(result, str)
+    assert "需要人工确认输入范围" in result
+    payload = json.loads(result)
+    assert payload["passed"] is True
+
+
+def test_activation_eval_tool_accepts_json_arrays_and_newline_prompts() -> None:
+    from opensquilla.skills.creator import proposer
+
+    skill_md = """---
+name: synth-alpha-report
+description: "Synthetic alpha report workflow."
+kind: meta
+meta_priority: 50
+triggers:
+  - "alpha report"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+
+    result = proposer.meta_skill_activation_eval_run(
+        skill_md=skill_md,
+        positive_prompts=json.dumps(["please run the alpha report"]),
+        negative_prompts="please run the beta digest\nplease summarize this note",
+        threshold=0.8,
+    )
+
+    payload = json.loads(result)
+    assert payload["passed"] is True
+    assert payload["true_positive_rate"] == 1.0
+    assert [case["kind"] for case in payload["cases"]] == [
+        "positive",
+        "negative",
+        "negative",
+    ]
+
+
+def test_activation_eval_tool_empty_prompt_strings_flow_to_structural_failure() -> None:
+    from opensquilla.skills.creator import proposer
+
+    skill_md = """---
+name: synth-alpha-report
+description: "Synthetic alpha report workflow."
+triggers:
+  - "alpha report"
+---
+"""
+
+    result = proposer.meta_skill_activation_eval_run(skill_md=skill_md)
+
+    payload = json.loads(result)
+    assert payload["passed"] is False
+    assert "missing_positive_prompts" in payload["issues"]
+    assert "missing_negative_prompts" in payload["issues"]
