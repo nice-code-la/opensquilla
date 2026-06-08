@@ -40,6 +40,8 @@ def evaluate_candidate_activation(
 
     if not prompts_positive:
         issues.append("missing_positive_prompts")
+    if not prompts_negative:
+        issues.append("missing_negative_prompts")
 
     for prompt in prompts_positive:
         cases.append(_evaluate_case("positive", prompt, metadata["triggers"]))

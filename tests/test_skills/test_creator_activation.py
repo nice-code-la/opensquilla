@@ -67,6 +67,20 @@ def test_activation_gate_fails_when_positive_rate_is_below_threshold() -> None:
     assert "true_positive_rate_below_threshold:0.50<0.80" in result["issues"]
 
 
+def test_activation_gate_fails_when_negative_prompts_are_missing() -> None:
+    result = evaluate_candidate_activation(
+        CANDIDATE_SKILL_MD,
+        positive_prompts=["please run the alpha report"],
+        negative_prompts=[],
+    )
+
+    assert result["passed"] is False
+    assert result["reason"] == "activation_failed"
+    assert result["true_positive_rate"] == 1.0
+    assert result["false_positive_count"] == 0
+    assert "missing_negative_prompts" in result["issues"]
+
+
 def test_activation_gate_fails_malformed_skill_metadata_without_raising() -> None:
     result = evaluate_candidate_activation(
         "---\nname: [broken\n---\n",
