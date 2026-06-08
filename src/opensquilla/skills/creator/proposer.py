@@ -482,7 +482,61 @@ _DRAFT_SEED_KEYS = (
     "evidence_refs",
     "duplicate_detection",
 )
-_DRAFT_SEED_MAX_CHARS = 4000
+_DRAFT_SEED_FIELD_MAX_CHARS = {
+    "source_kind": 120,
+    "goal": 900,
+    "observed_steps": 500,
+    "candidate_triggers": 500,
+    "inputs": 700,
+    "outputs": 700,
+    "constraints": 900,
+    "negative_cases": 900,
+    "evidence_refs": 500,
+    "duplicate_detection": 900,
+}
+_DRAFT_SEED_LIST_MAX_ITEMS = 8
+_DRAFT_SEED_LIST_ITEM_MAX_CHARS = 300
+_DRAFT_SEED_DICT_MAX_ITEMS = 12
+_DRAFT_SEED_DICT_KEY_MAX_CHARS = 80
+_DRAFT_SEED_NESTED_STRING_MAX_CHARS = 300
+
+
+def _truncate_draft_seed_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "... (truncated)"
+
+
+def _cap_draft_seed_value(value: Any, *, max_chars: int) -> Any:
+    if isinstance(value, str):
+        return _truncate_draft_seed_text(value, max_chars)
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, list):
+        capped = [
+            _cap_draft_seed_value(item, max_chars=_DRAFT_SEED_LIST_ITEM_MAX_CHARS)
+            for item in value[:_DRAFT_SEED_LIST_MAX_ITEMS]
+        ]
+        remaining = len(value) - len(capped)
+        if remaining > 0:
+            capped.append(f"... ({remaining} items truncated)")
+        return capped
+    if isinstance(value, dict):
+        items = list(value.items())
+        capped_dict = {
+            _truncate_draft_seed_text(str(key), _DRAFT_SEED_DICT_KEY_MAX_CHARS): (
+                _cap_draft_seed_value(
+                    item,
+                    max_chars=_DRAFT_SEED_NESTED_STRING_MAX_CHARS,
+                )
+            )
+            for key, item in items[:_DRAFT_SEED_DICT_MAX_ITEMS]
+        }
+        remaining = len(items) - len(capped_dict)
+        if remaining > 0:
+            capped_dict["_truncated"] = f"{remaining} entries truncated"
+        return capped_dict
+    return _truncate_draft_seed_text(str(value), max_chars)
 
 
 def _format_draft_seed_context(draft_seed_json: str) -> str:
@@ -497,18 +551,17 @@ def _format_draft_seed_context(draft_seed_json: str) -> str:
     if not isinstance(parsed, dict):
         return "draft_seed_json was not a JSON object; ignore it."
 
-    evidence = {
-        key: parsed[key]
-        for key in _DRAFT_SEED_KEYS
-        if key in parsed
-    }
+    evidence = {}
+    for key in _DRAFT_SEED_KEYS:
+        if key in parsed:
+            evidence[key] = _cap_draft_seed_value(
+                parsed[key],
+                max_chars=_DRAFT_SEED_FIELD_MAX_CHARS[key],
+            )
     if not evidence:
         return "(no supported draft_seed_json evidence keys were provided)"
 
-    rendered = json.dumps(evidence, ensure_ascii=False, indent=2, default=str)
-    if len(rendered) <= _DRAFT_SEED_MAX_CHARS:
-        return rendered
-    return rendered[:_DRAFT_SEED_MAX_CHARS] + "\n... (draft seed truncated)"
+    return json.dumps(evidence, ensure_ascii=False, indent=2, default=str)
 
 
 def meta_skill_fill_slots(

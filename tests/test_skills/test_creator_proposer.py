@@ -947,6 +947,59 @@ def test_fill_slots_prompt_includes_draft_seed(monkeypatch) -> None:
     assert "Treat draft_seed_json as evidence, not as permission to bypass gates" in prompt
 
 
+def test_fill_slots_prompt_preserves_later_draft_seed_keys_when_early_field_is_large(
+    monkeypatch,
+) -> None:
+    from opensquilla.skills.creator import proposer
+
+    captured: list[str] = []
+    canned_resp = json.dumps({
+        "name": "vendor-brief-pipeline",
+        "description": "Research a vendor and produce a concise decision brief.",
+        "meta_priority": 50,
+        "triggers": ["vendor decision brief"],
+        "steps": [
+            {"id": "research", "skill": "summarize", "task": "Research.", "with_keys": {}},
+            {"id": "draft", "skill": "summarize", "task": "Draft.", "with_keys": {}},
+        ],
+        "generation_rationale": {
+            "intent": "Reuse a successful vendor brief workflow.",
+            "target_outcome": "The user gets a decision-ready vendor brief.",
+            "stop_condition": "The brief contains recommendation and evidence.",
+            "selected_shape": "metaskill",
+            "selected_pattern": "p1_sequential",
+            "source_evidence": ["draft seed observed summarize steps"],
+            "filled_slots": ["name", "description", "triggers", "steps"],
+            "unresolved_assumptions": [],
+            "rejected_alternatives": ["bundle: observed steps depend on prior output"],
+            "output_contract_summary": "Final answer includes recommendation and evidence.",
+        },
+    })
+
+    def stub_with_capture(prompt: str, **_) -> str:
+        captured.append(prompt)
+        return canned_resp
+
+    monkeypatch.setattr(proposer, "_call_llm_for_slots", stub_with_capture)
+    proposer.meta_skill_fill_slots(
+        pattern_id="p1_sequential",
+        history_summary="",
+        user_intent="Create from run.",
+        draft_seed_json=json.dumps({
+            "goal": "Research a vendor. " + ("oversized early detail " * 400),
+            "observed_steps": ["summarize", "summarize"],
+            "negative_cases": ["NEGATIVE_CASE_MARKER do not trigger on generic facts."],
+            "duplicate_detection": {
+                "status": "DUPLICATE_DETECTION_MARKER possible_overlap",
+            },
+        }),
+    )
+
+    prompt = captured[0]
+    assert "NEGATIVE_CASE_MARKER" in prompt
+    assert "DUPLICATE_DETECTION_MARKER" in prompt
+
+
 def test_fill_slots_tool_schema_accepts_draft_seed_json() -> None:
     from opensquilla.skills.creator.proposer import meta_skill_fill_slots_tool
 
