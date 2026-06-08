@@ -28,22 +28,45 @@ def draft_meta_skill_seed(
     inputs = _json_obj(record.inputs_json)
     plan = _plan_from_record(record)
     user_message = str(inputs.get("user_message") or inputs.get("message") or "").strip()
+    goal = _seed_goal(record, plan, user_message)
     trigger_candidates = _trigger_candidates(record.meta_skill_name, user_message)
+    request_template = dict(plan.request_template) if plan else {}
+    output_contract = dict(plan.output_contract) if plan else {}
+    normalized = _normalized_seed(
+        record,
+        plan=plan,
+        goal=goal,
+        candidate_triggers=trigger_candidates,
+        request_template=request_template,
+        output_contract=output_contract,
+    )
+    creator_input = {
+        "user_message": user_message,
+        "draft_seed_json": json.dumps(
+            normalized,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "recommended_mode": "PERSISTED_PROPOSAL",
+    }
     return {
+        "status": "ok",
+        **normalized,
+        "creator_input": creator_input,
         "source_run": {
             "run_id": record.run_id,
             "meta_skill_name": record.meta_skill_name,
             "status": record.status,
         },
-        "name": f"{_slug(record.meta_skill_name)}-draft",
+        "name": f"{_slug(_draft_base_name(record.meta_skill_name))}-draft",
         "description": _draft_description(record, user_message),
         "trigger_candidates": trigger_candidates,
         "trigger_conflicts": detect_trigger_conflicts(
             trigger_candidates,
             existing_specs=existing_specs,
         ),
-        "request_template": dict(plan.request_template) if plan else {},
-        "output_contract": dict(plan.output_contract) if plan else {},
+        "request_template": request_template,
+        "output_contract": output_contract,
         "eval_prompts": _seed_eval_prompts(plan, user_message),
         "composition": {
             "steps": _seed_steps(plan, record),
@@ -79,12 +102,108 @@ def _plan_from_record(record: RunRecord) -> MetaPlan | None:
         return None
 
 
+def _normalized_seed(
+    record: RunRecord,
+    *,
+    plan: MetaPlan | None,
+    goal: str,
+    candidate_triggers: list[str],
+    request_template: dict[str, Any],
+    output_contract: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "source_kind": "meta_run",
+        "goal": goal,
+        "observed_steps": _observed_steps(record, plan),
+        "candidate_triggers": candidate_triggers,
+        "inputs": _seed_inputs(request_template),
+        "outputs": _seed_outputs(output_contract, plan),
+        "constraints": _seed_constraints(request_template, output_contract),
+        "negative_cases": _seed_negative_cases(goal),
+        "evidence_refs": [record.run_id],
+    }
+
+
+def _seed_goal(record: RunRecord, plan: MetaPlan | None, user_message: str) -> str:
+    if user_message:
+        return user_message
+    if plan and plan.request_template.get("outcome"):
+        return str(plan.request_template["outcome"]).strip()
+    if record.final_text:
+        return record.final_text.strip()
+    return _draft_base_name(record.meta_skill_name).replace("-", " ").strip()
+
+
 def _json_obj(raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw or "{}")
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _observed_steps(record: RunRecord, plan: MetaPlan | None) -> list[str]:
+    observed = [
+        step.effective_skill or step.declared_skill
+        for step in record.steps
+        if step.effective_skill or step.declared_skill
+    ]
+    if observed:
+        return observed
+    if plan is None:
+        return []
+    return [step.skill for step in plan.steps if step.skill]
+
+
+def _seed_inputs(request_template: dict[str, Any]) -> list[str]:
+    fields = request_template.get("fields", [])
+    inputs: list[str] = []
+    if isinstance(fields, list):
+        for field in fields:
+            name = field.get("name") if isinstance(field, dict) else field
+            if name:
+                inputs.append(str(name))
+    return _dedupe(inputs)
+
+
+def _seed_outputs(output_contract: dict[str, Any], plan: MetaPlan | None) -> list[str]:
+    outputs = _string_list(output_contract.get("required_sections"))
+    if outputs:
+        return _dedupe(outputs)
+    if plan is None:
+        return []
+    from_eval: list[str] = []
+    for prompt in plan.eval_prompts:
+        from_eval.extend(_string_list(prompt.get("rubric")))
+    return _dedupe(from_eval)
+
+
+def _seed_constraints(
+    request_template: dict[str, Any],
+    output_contract: dict[str, Any],
+) -> list[str]:
+    constraints: list[str] = []
+    constraints.extend(_string_list(request_template.get("constraints")))
+    constraints.extend(_string_list(output_contract.get("constraints")))
+    return _dedupe(constraints)
+
+
+def _seed_negative_cases(goal: str) -> list[str]:
+    if goal:
+        return [f"Requests unrelated to this goal: {goal[:80]}"]
+    return ["Requests unrelated to the persisted meta-skill run."]
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, dict):
+        return [str(key) for key in value if str(key).strip()]
+    if isinstance(value, Iterable):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)] if str(value).strip() else []
 
 
 def _trigger_candidates(meta_skill_name: str, user_message: str) -> list[str]:
@@ -159,3 +278,21 @@ def _seed_eval_prompts(plan: MetaPlan | None, user_message: str) -> list[dict[st
 def _slug(value: str) -> str:
     slug = _SLUG_RE.sub("-", value.lower()).strip("-")
     return slug or "meta-skill"
+
+
+def _draft_base_name(meta_skill_name: str) -> str:
+    if meta_skill_name.startswith("meta-"):
+        return meta_skill_name.removeprefix("meta-")
+    return meta_skill_name
+
+
+def _dedupe(items: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        stripped = item.strip()
+        key = stripped.lower()
+        if stripped and key not in seen:
+            out.append(stripped)
+            seen.add(key)
+    return out
