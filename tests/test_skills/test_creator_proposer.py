@@ -558,3 +558,49 @@ def test_sequential_slots_accept_generation_rationale() -> None:
 
     assert slots.generation_rationale.selected_shape == "metaskill"
     assert slots.generation_rationale.selected_pattern == "p1_sequential"
+
+
+def test_fill_slots_prompt_requires_generation_rationale(monkeypatch) -> None:
+    from opensquilla.skills.creator import proposer
+
+    captured: list[str] = []
+    canned_resp = json.dumps({
+        "name": "ok-pipeline",
+        "description": "x" * 50,
+        "meta_priority": 50,
+        "triggers": ["t"],
+        "steps": [
+            {"id": "a", "skill": "summarize", "task": "t", "with_keys": {}},
+            {"id": "b", "skill": "memory", "task": "t", "with_keys": {}},
+        ],
+        "generation_rationale": {
+            "intent": "Create a concise two-step workflow.",
+            "target_outcome": "The user gets processed text and saved output.",
+            "stop_condition": "The final step reports saved output.",
+            "selected_shape": "metaskill",
+            "selected_pattern": "p1_sequential",
+            "source_evidence": ["user requested two-step workflow"],
+            "filled_slots": ["name", "description", "triggers", "steps"],
+            "unresolved_assumptions": [],
+            "rejected_alternatives": ["bundle: steps depend on prior output"],
+            "output_contract_summary": "Final answer reports processing and save status.",
+        },
+    })
+
+    def stub_with_capture(prompt: str, **_) -> str:
+        captured.append(prompt)
+        return canned_resp
+
+    monkeypatch.setattr(proposer, "_call_llm_for_slots", stub_with_capture)
+    proposer.meta_skill_fill_slots(
+        pattern_id="p1_sequential",
+        history_summary="(test)",
+        user_intent="test",
+    )
+
+    assert captured
+    prompt = captured[0]
+    assert "generation_rationale" in prompt
+    assert "selected_shape" in prompt
+    assert "rejected_alternatives" in prompt
+    assert "Do not invent tools, gates, inputs, or output contracts" in prompt
