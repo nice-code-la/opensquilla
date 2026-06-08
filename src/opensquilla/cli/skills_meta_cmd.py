@@ -249,6 +249,11 @@ def runs_draft(
         typer.echo(json.dumps(seed, default=str))
         return
 
+    if seed.get("status") == "cannot_draft":
+        typer.echo("status:        cannot_draft")
+        typer.echo(f"reason:        {seed.get('reason', 'unknown')}")
+        return
+
     typer.echo(f"name:          {seed['name']}")
     typer.echo(f"description:   {seed['description']}")
     typer.echo("triggers:")

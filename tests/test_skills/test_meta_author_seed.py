@@ -143,3 +143,43 @@ def test_author_seed_scrubs_secret_and_file_like_literals() -> None:
     assert "[secret]" in payload
     assert "[file]" in payload
     assert seed["privacy_warnings"] == ["secret_like_text_redacted", "file_path_redacted"]
+
+
+def test_author_seed_scrubs_plan_derived_payloads() -> None:
+    plan = MetaPlan(
+        name="meta-vendor-brief",
+        triggers=("vendor decision brief",),
+        priority=10,
+        steps=(
+            MetaStep(id="search", skill="web-search", kind="agent", label="Search"),
+        ),
+        request_template={
+            "outcome": "Decision brief from ghp_1234567890abcdef",
+            "fields": [{
+                "name": "vendor",
+                "prompt": "Review /home/alice/private/customer_contract.pdf",
+            }],
+        },
+        output_contract={
+            "constraints": ["Do not expose xoxb_1234567890abcdef"],
+        },
+        eval_prompts=[{
+            "name": "vendor-brief",
+            "prompt": "Use /home/alice/private/vendor.pdf and pk-live-1234567890abcdef",
+            "rubric": ["Evidence from /home/alice/private/rubric.md"],
+        }],
+    )
+    seed = draft_meta_skill_seed(replace(
+        _record(),
+        plan_snapshot_json=json.dumps(to_jsonable(plan)),
+    ))
+
+    payload = json.dumps(seed, ensure_ascii=False)
+    assert "ghp_1234567890abcdef" not in payload
+    assert "xoxb_1234567890abcdef" not in payload
+    assert "pk-live" not in payload
+    assert "/home/alice/private" not in payload
+    assert "[secret]" in payload
+    assert "[file]" in payload
+    assert seed["outputs"] == ["Evidence from [file]"]
+    assert seed["privacy_warnings"] == ["secret_like_text_redacted", "file_path_redacted"]

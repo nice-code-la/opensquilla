@@ -141,6 +141,14 @@ def test_runs_draft_json(runner: CliRunner, seeded_db) -> None:
     assert data["trigger_candidates"]
 
 
+def test_runs_draft_non_json_handles_cannot_draft(runner: CliRunner, seeded_db) -> None:
+    result = runner.invoke(cli_app, ["skills", "meta", "runs", "draft", seeded_db["rid_fail"]])
+
+    assert result.exit_code == 0, result.output
+    assert "status:        cannot_draft" in result.output
+    assert "reason:        run_not_successful" in result.output
+
+
 def test_runs_show_bad_id(runner: CliRunner, seeded_db) -> None:
     result = runner.invoke(cli_app, ["skills", "meta", "runs", "show", "BOGUS", "--json"])
     assert result.exit_code != 0

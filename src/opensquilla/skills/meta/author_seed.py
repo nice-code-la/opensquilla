@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from opensquilla.persistence.meta_run_writer import RunRecord, summarize_run_record
@@ -13,7 +13,7 @@ from opensquilla.skills.meta.types import MetaPlan
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _SECRET_LITERAL_RE = re.compile(
-    r"(?i)\b(?:sk|pk|ghp|gho|ghu|ghs|ghr|xoxb|xoxp)-[A-Za-z0-9_\-]{8,}\b"
+    r"(?i)\b(?:sk|pk|ghp|gho|ghu|ghs|ghr|xoxb|xoxp)[_-][A-Za-z0-9_\-]{8,}\b"
 )
 _FILE_PATH_RE = re.compile(r"(?:/[A-Za-z0-9._\- ]+){2,}\.[A-Za-z0-9]{1,8}")
 
@@ -36,10 +36,24 @@ def draft_meta_skill_seed(
     refusal_reason = _can_draft(record, user_message)
     if refusal_reason:
         return _cannot_draft(record, refusal_reason)
-    goal = _seed_goal(record, plan, user_message)
     trigger_candidates = _trigger_candidates(record.meta_skill_name, user_message)
-    request_template = dict(plan.request_template) if plan else {}
-    output_contract = dict(plan.output_contract) if plan else {}
+    request_template, request_warnings = _scrub_value(
+        dict(plan.request_template) if plan else {}
+    )
+    output_contract, output_warnings = _scrub_value(
+        dict(plan.output_contract) if plan else {}
+    )
+    eval_prompts, eval_warnings = _scrub_value(_seed_eval_prompts(plan, user_message))
+    request_template = request_template if isinstance(request_template, dict) else {}
+    output_contract = output_contract if isinstance(output_contract, dict) else {}
+    eval_prompts = eval_prompts if isinstance(eval_prompts, list) else []
+    privacy_warnings = _merge_warnings(
+        privacy_warnings,
+        request_warnings,
+        output_warnings,
+        eval_warnings,
+    )
+    goal = _seed_goal(record, request_template, user_message)
     normalized = _normalized_seed(
         record,
         plan=plan,
@@ -47,6 +61,7 @@ def draft_meta_skill_seed(
         candidate_triggers=trigger_candidates,
         request_template=request_template,
         output_contract=output_contract,
+        eval_prompts=eval_prompts,
     )
     creator_input = {
         "user_message": user_message,
@@ -72,7 +87,7 @@ def draft_meta_skill_seed(
         ),
         "request_template": request_template,
         "output_contract": output_contract,
-        "eval_prompts": _seed_eval_prompts(plan, user_message),
+        "eval_prompts": eval_prompts,
         "composition": {
             "steps": _seed_steps(plan, record),
         },
@@ -145,6 +160,48 @@ def _scrub_text(value: str) -> tuple[str, list[str]]:
     return with_files.strip(), warnings
 
 
+def _scrub_value(value: Any) -> tuple[Any, list[str]]:
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, Mapping):
+        warnings: list[str] = []
+        scrubbed: dict[Any, Any] = {}
+        for key, item in value.items():
+            scrubbed_key, key_warnings = _scrub_value(key)
+            scrubbed_item, item_warnings = _scrub_value(item)
+            scrubbed[scrubbed_key] = scrubbed_item
+            warnings = _merge_warnings(warnings, key_warnings, item_warnings)
+        return scrubbed, warnings
+    if isinstance(value, list):
+        warnings = []
+        scrubbed_items = []
+        for item in value:
+            scrubbed_item, item_warnings = _scrub_value(item)
+            scrubbed_items.append(scrubbed_item)
+            warnings = _merge_warnings(warnings, item_warnings)
+        return scrubbed_items, warnings
+    if isinstance(value, tuple):
+        warnings = []
+        scrubbed_items = []
+        for item in value:
+            scrubbed_item, item_warnings = _scrub_value(item)
+            scrubbed_items.append(scrubbed_item)
+            warnings = _merge_warnings(warnings, item_warnings)
+        return tuple(scrubbed_items), warnings
+    return value, []
+
+
+def _merge_warnings(*groups: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for group in groups:
+        for warning in group:
+            if warning not in seen:
+                merged.append(warning)
+                seen.add(warning)
+    return merged
+
+
 def _normalized_seed(
     record: RunRecord,
     *,
@@ -153,6 +210,7 @@ def _normalized_seed(
     candidate_triggers: list[str],
     request_template: dict[str, Any],
     output_contract: dict[str, Any],
+    eval_prompts: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
         "source_kind": "meta_run",
@@ -160,18 +218,22 @@ def _normalized_seed(
         "observed_steps": _observed_steps(record, plan),
         "candidate_triggers": candidate_triggers,
         "inputs": _seed_inputs(request_template),
-        "outputs": _seed_outputs(output_contract, plan),
+        "outputs": _seed_outputs(output_contract, eval_prompts),
         "constraints": _seed_constraints(request_template, output_contract),
         "negative_cases": _seed_negative_cases(goal),
         "evidence_refs": [record.run_id],
     }
 
 
-def _seed_goal(record: RunRecord, plan: MetaPlan | None, user_message: str) -> str:
+def _seed_goal(
+    record: RunRecord,
+    request_template: dict[str, Any],
+    user_message: str,
+) -> str:
     if user_message:
         return user_message
-    if plan and plan.request_template.get("outcome"):
-        return str(plan.request_template["outcome"]).strip()
+    if request_template.get("outcome"):
+        return str(request_template["outcome"]).strip()
     if record.final_text:
         return record.final_text.strip()
     return _draft_base_name(record.meta_skill_name).replace("-", " ").strip()
@@ -209,14 +271,15 @@ def _seed_inputs(request_template: dict[str, Any]) -> list[str]:
     return _dedupe(inputs)
 
 
-def _seed_outputs(output_contract: dict[str, Any], plan: MetaPlan | None) -> list[str]:
+def _seed_outputs(
+    output_contract: dict[str, Any],
+    eval_prompts: list[dict[str, Any]],
+) -> list[str]:
     outputs = _string_list(output_contract.get("required_sections"))
     if outputs:
         return _dedupe(outputs)
-    if plan is None:
-        return []
     from_eval: list[str] = []
-    for prompt in plan.eval_prompts:
+    for prompt in eval_prompts:
         from_eval.extend(_string_list(prompt.get("rubric")))
     return _dedupe(from_eval)
 
