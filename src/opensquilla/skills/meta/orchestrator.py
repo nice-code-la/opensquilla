@@ -392,6 +392,72 @@ def _append_artifact_verification_notice(text: str, report: dict[str, Any]) -> s
     return f"{text.rstrip()}\n\n---\n\n" + "\n".join(lines)
 
 
+async def _repair_output_contract_text(
+    text: str,
+    output_contract: dict[str, Any],
+    *,
+    llm_chat: LLMChat | None,
+    language: str | None = None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Repair final text once when deterministic contract checks fail."""
+
+    before = _audit_output_contract(text, output_contract)
+    metadata: dict[str, Any] = {
+        "attempted": False,
+        "status": "not_needed",
+        "before": before,
+    }
+    if before.get("status") != "fail":
+        return text, before, metadata
+    if llm_chat is None:
+        metadata["status"] = "unavailable"
+        return text, before, metadata
+
+    missing = list(before.get("missing_required_sections") or [])
+    forbidden = list(before.get("forbidden_terms_found") or [])
+    required = _contract_items(output_contract.get("required_sections"))
+    metadata["attempted"] = True
+    metadata["missing_required_sections"] = missing
+    metadata["forbidden_terms_found"] = forbidden
+
+    language_rule = (
+        "Write the repaired output in English."
+        if str(language or "").lower().startswith("en")
+        else "Write the repaired output in the same language as the original output."
+    )
+    system_prompt = (
+        "You repair a MetaSkill final answer so it satisfies its declared output contract. "
+        "Preserve correct existing content. Add only missing required sections. "
+        "Remove forbidden wording. Do not mention this repair process."
+    )
+    user_message = (
+        f"{language_rule}\n\n"
+        f"required sections: {', '.join(required) if required else 'none'}\n"
+        f"missing required sections: {', '.join(missing) if missing else 'none'}\n"
+        f"forbidden terms found: {', '.join(forbidden) if forbidden else 'none'}\n\n"
+        "Original final answer:\n"
+        f"{text}"
+    )
+    try:
+        repaired = (await llm_chat(system_prompt, user_message)).strip()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("meta.output_contract_repair_failed: %s", exc)
+        metadata["status"] = "error"
+        metadata["error"] = str(exc)
+        return text, before, metadata
+    if not repaired:
+        metadata["status"] = "empty_response"
+        return text, before, metadata
+
+    after = _audit_output_contract(repaired, output_contract)
+    metadata["after"] = after
+    if after.get("status") == "fail":
+        metadata["status"] = "unresolved"
+        return text, before, metadata
+    metadata["status"] = "repaired"
+    return repaired, after, metadata
+
+
 def _step_usage_from_tracker(
     usage_tracker: Any | None,
     *,
@@ -762,9 +828,15 @@ class MetaOrchestrator:
                             item.final_text,
                         )
                         if match.plan.output_contract:
-                            item.metadata["output_contract_audit"] = _audit_output_contract(
+                            (
+                                item.final_text,
+                                item.metadata["output_contract_audit"],
+                                item.metadata["output_contract_repair"],
+                            ) = await _repair_output_contract_text(
                                 item.final_text,
                                 match.plan.output_contract,
+                                llm_chat=self._llm_chat,
+                                language=str(match.inputs.get("user_language") or ""),
                             )
                             item.metadata["artifact_verification"] = _verify_declared_artifacts(
                                 match.plan.output_contract,
@@ -883,12 +955,6 @@ class MetaOrchestrator:
         full event stream through to the outer iterator so the user can see
         every inner tool call.
         """
-        log.warning(
-            "DEBUG_TRACE_dispatch_step_stream_entered",
-            step=step.id,
-            kind=step.kind,
-        )
-
         # Operator-controlled opt-out: when memory persistence is disabled
         # at the config level, short-circuit any step that targets the
         # ``memory`` skill (the conventional last-step archive). The skip
@@ -977,14 +1043,6 @@ class MetaOrchestrator:
             # does not regress.
             prefill_context: dict[str, Any] | None = None
             llm_chat_for_prefill: Any = None
-            log.warning(
-                "DEBUG_TRACE_user_input_dispatch",
-                step=step.id,
-                cfg_nl_extract=bool(cfg and cfg.nl_extract),
-                has_llm_chat=self._llm_chat is not None,
-                inputs_keys=sorted(inputs.keys()),
-                outputs_keys=sorted(outputs.keys()),
-            )
             if (
                 cfg is not None
                 and cfg.nl_extract
@@ -1374,9 +1432,15 @@ class MetaOrchestrator:
                             ev.final_text,
                         )
                         if plan.output_contract:
-                            ev.metadata["output_contract_audit"] = _audit_output_contract(
+                            (
+                                ev.final_text,
+                                ev.metadata["output_contract_audit"],
+                                ev.metadata["output_contract_repair"],
+                            ) = await _repair_output_contract_text(
                                 ev.final_text,
                                 plan.output_contract,
+                                llm_chat=self._llm_chat,
+                                language=str(inputs.get("user_language") or ""),
                             )
                             ev.metadata["artifact_verification"] = _verify_declared_artifacts(
                                 plan.output_contract,

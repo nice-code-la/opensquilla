@@ -270,6 +270,32 @@ def test_meta_runs_replay_keeps_original_request_before_large_outputs(tmp_path: 
     assert "...[truncated for replay]" in message
 
 
+def test_meta_runs_replay_adds_mode_specific_recovery_instruction(tmp_path: Path) -> None:
+    writer, run_id = _seed_writer(tmp_path)
+    writer.finish_run_sync(
+        run_id=run_id,
+        status="failed",
+        result=MetaResult(ok=False, error="wkhtmltopdf command not found", failed_step_id="s1"),
+    )
+    try:
+        ctx = RpcContext(conn_id="test", meta_run_writer=writer)
+        install_payload = asyncio.run(_handle_meta_runs_replay({
+            "runId": run_id,
+            "mode": "install-dependency",
+        }, ctx))
+        text_payload = asyncio.run(_handle_meta_runs_replay({
+            "runId": run_id,
+            "mode": "text-only",
+        }, ctx))
+    finally:
+        writer.close()
+
+    assert "install the missing dependency" in install_payload["replay"]["message"]
+    assert "then retry" in install_payload["replay"]["message"]
+    assert "avoid generated-file or artifact delivery" in text_payload["replay"]["message"]
+    assert "use the successful prior outputs" in text_payload["replay"]["message"]
+
+
 def test_meta_runs_diff_rpc_compares_runs(tmp_path: Path) -> None:
     writer, left_run_id = _seed_writer(tmp_path)
     plan = MetaPlan(

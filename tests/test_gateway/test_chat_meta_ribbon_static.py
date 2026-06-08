@@ -348,3 +348,28 @@ def test_chat_js_handles_ribbon_action_events():
     assert "_replayMetaRibbonRun" in text
     assert "meta.runs.replay" in text
     assert "_onSend();" in text
+
+
+def test_meta_ribbon_localizes_dynamic_rescue_action_labels():
+    text = RIBBON_JS.read_text()
+    assert "function rescueActionLabel(action, copy)" in text
+    for label in (
+        "重试整个 run",
+        "重试失败步骤",
+        "带已有上下文重试",
+        "切换 meta-skill…",
+        "安装缺失依赖",
+        "只保留文本继续",
+    ):
+        assert label in text
+    assert "rescueActionLabel(action, copy)" in text
+
+
+def test_chat_js_executes_dependency_and_text_only_rescue_actions_as_replay_drafts():
+    text = CHAT_JS.read_text()
+    assert "_replayMetaRibbonRun(" in text
+    assert "install-dependency" in text
+    assert "continue-text-only" in text
+    assert "mode: mode || 'failed-step'" in text
+    assert "'install-dependency'" in text
+    assert "'text-only'" in text

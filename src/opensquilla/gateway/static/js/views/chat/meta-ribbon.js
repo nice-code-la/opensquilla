@@ -214,6 +214,14 @@
         retryRun: '重试整个 run',
         switchSkill: '切换 meta-skill…',
         showDetail: '查看错误详情',
+        actionLabels: {
+          'retry-run': '重试整个 run',
+          'retry-step': '重试失败步骤',
+          'retry-with-partial-context': '带已有上下文重试',
+          'switch-meta-skill': '切换 meta-skill…',
+          'install-dependency': '安装缺失依赖',
+          'continue-text-only': '只保留文本继续',
+        },
         counter: (index, total) => `第 ${index} / ${total} 步`,
         progressAria: (name) => `${name} 运行进度`,
         stepAria: (index, total, label, stepState) => (
@@ -252,6 +260,14 @@
       retryRun: 'Retry whole run',
       switchSkill: 'Switch meta-skill…',
       showDetail: 'View error details',
+      actionLabels: {
+        'retry-run': 'Retry whole run',
+        'retry-step': 'Retry failed step',
+        'retry-with-partial-context': 'Retry with partial context',
+        'switch-meta-skill': 'Switch meta-skill…',
+        'install-dependency': 'Install missing dependency',
+        'continue-text-only': 'Continue text-only',
+      },
       counter: (index, total) => `Step ${index} of ${total}`,
       progressAria: (name) => `${name} run progress`,
       stepAria: (index, total, label, stepState) => (
@@ -288,7 +304,7 @@
     const dynamicActions = rescueActions.length > 0
       ? rescueActions.map((action) => `
         <button data-action="${escapeAttr(action.id || '')}" data-step-id="${escapeAttr(failedStep.id)}">
-          ${escapeHtml(action.label || humanizeStepId(action.id || 'action'))}
+          ${escapeHtml(rescueActionLabel(action, copy))}
         </button>
       `).join('')
       : `
@@ -302,6 +318,13 @@
       ${dynamicActions}
       <button data-action="show-detail" data-step-id="${escapeAttr(failedStep.id)}">${escapeHtml(copy.showDetail)}</button>
     `;
+  }
+
+  function rescueActionLabel(action, copy) {
+    const id = action && action.id ? String(action.id) : '';
+    return (copy.actionLabels && copy.actionLabels[id])
+      || (action && action.label)
+      || humanizeStepId(id || 'action');
   }
 
   function wireToggle(rootEl, state) {

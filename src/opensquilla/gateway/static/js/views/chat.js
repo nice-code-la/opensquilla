@@ -4899,9 +4899,15 @@ const ChatView = (() => {
           _textarea.focus();
         }
       } else if (action === 'install-dependency') {
-        UI.toast('Install the missing dependency, then retry this MetaSkill run.', 'info', 3000);
+        _replayMetaRibbonRun(
+          ev && ev.target ? ev.target.closest('.meta-ribbon') : null,
+          'install-dependency',
+        );
       } else if (action === 'continue-text-only') {
-        UI.toast('Continue with text outputs only, then retry if an artifact is still needed.', 'info', 3000);
+        _replayMetaRibbonRun(
+          ev && ev.target ? ev.target.closest('.meta-ribbon') : null,
+          'text-only',
+        );
       } else if (action === 'show-detail' && stepId) {
         const card = document.querySelector(`[data-tool-use-id="meta_step_${stepId}"]`);
         if (card) {

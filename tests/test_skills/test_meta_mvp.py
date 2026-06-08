@@ -2573,6 +2573,88 @@ async def test_orchestrator_result_metadata_includes_output_contract_audit() -> 
     assert result.metadata["output_contract_audit"]["missing_required_sections"] == ["Evidence"]
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_repairs_missing_output_contract_sections() -> None:
+    spec = _make_meta_spec(
+        composition={
+            "steps": [
+                {"id": "final", "skill": "summarize"},
+            ],
+        },
+        final_text_mode="raw",
+        output_contract={"required_sections": ["Recommendation", "Evidence"]},
+    )
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+
+    repair_calls: list[tuple[str, str]] = []
+
+    async def stub_runner(_system_prompt: str, _user_message: str) -> AsyncIterator[AgentEvent]:
+        yield TextDeltaEvent(text="## Recommendation\nNegotiate renewal.")
+
+    async def repair_chat(system_prompt: str, user_message: str) -> str:
+        repair_calls.append((system_prompt, user_message))
+        return (
+            "## Recommendation\nNegotiate renewal.\n\n"
+            "## Evidence\nPrice increased 38% and the SLA credit is capped at 5%."
+        )
+
+    orch = MetaOrchestrator(
+        skill_loader=_FakeLoader([_make_skill_spec("summarize", "")]),
+        agent_runner=stub_runner,
+        llm_chat=repair_chat,
+    )
+    result = await orch.run(MetaMatch(plan=plan, inputs={"user_message": "u"}))
+
+    assert result.metadata["output_contract_repair"]["attempted"] is True
+    assert result.metadata["output_contract_repair"]["status"] == "repaired"
+    assert result.metadata["output_contract_audit"]["status"] == "pass"
+    assert "## Evidence" in result.final_text
+    assert len(repair_calls) == 1
+    assert "missing required sections" in repair_calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_keeps_original_when_output_contract_repair_is_unresolved() -> None:
+    spec = _make_meta_spec(
+        composition={
+            "steps": [
+                {"id": "final", "skill": "summarize"},
+            ],
+        },
+        final_text_mode="raw",
+        output_contract={"required_sections": ["Recommendation", "Evidence"]},
+    )
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+
+    async def stub_runner(_system_prompt: str, _user_message: str) -> AsyncIterator[AgentEvent]:
+        yield TextDeltaEvent(text="## Recommendation\nNegotiate renewal.")
+
+    async def repair_chat(_system_prompt: str, _user_message: str) -> str:
+        return "Still missing the required sections."
+
+    orch = MetaOrchestrator(
+        skill_loader=_FakeLoader([_make_skill_spec("summarize", "")]),
+        agent_runner=stub_runner,
+        llm_chat=repair_chat,
+    )
+    result = await orch.run(MetaMatch(plan=plan, inputs={"user_message": "u"}))
+
+    assert result.metadata["output_contract_repair"]["status"] == "unresolved"
+    assert result.metadata["output_contract_audit"]["status"] == "fail"
+    assert "## Recommendation\nNegotiate renewal." in result.final_text
+    assert "Still missing the required sections." not in result.final_text
+
+
+def test_meta_runtime_logs_do_not_include_debug_trace_markers() -> None:
+    for path in (
+        Path("src/opensquilla/skills/meta/orchestrator.py"),
+        Path("src/opensquilla/skills/meta/scheduler.py"),
+    ):
+        assert "DEBUG_TRACE" not in path.read_text()
+
+
 def test_verify_declared_artifacts_reports_ok_empty_and_missing(tmp_path: Path) -> None:
     ok = tmp_path / "ok.md"
     empty = tmp_path / "empty.md"

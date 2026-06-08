@@ -187,6 +187,27 @@ def _bounded_text(text: str, limit: int = REPLAY_CONTEXT_MAX_CHARS) -> str:
     return text[: limit - 25].rstrip() + "\n...[truncated for replay]"
 
 
+def _replay_mode_instruction(mode: str) -> str:
+    if mode == "failed-step":
+        return "Retry the prior failed step using the successful prior outputs as context."
+    if mode == "partial-context":
+        return (
+            "Retry using the successful prior outputs as context and keep the "
+            "original request intact."
+        )
+    if mode == "install-dependency":
+        return (
+            "First identify and install the missing dependency if possible, "
+            "then retry the failed work."
+        )
+    if mode == "text-only":
+        return (
+            "Continue in text-only mode: use the successful prior outputs and "
+            "avoid generated-file or artifact delivery."
+        )
+    return "Retry the meta-skill run with the provided prior context."
+
+
 def build_replay_request(record: RunRecord, *, mode: str = "run") -> dict[str, Any]:
     inputs = json_object(record.inputs_json)
     failed_step_id = record.failed_step_id or ""
@@ -198,6 +219,7 @@ def build_replay_request(record: RunRecord, *, mode: str = "run") -> dict[str, A
     context_lines = [
         f"Replay meta-skill run {record.run_id} ({record.meta_skill_name}).",
         f"Replay mode: {mode}.",
+        _replay_mode_instruction(mode),
     ]
     user_message = str(inputs.get("user_message") or "").strip()
     if user_message:
