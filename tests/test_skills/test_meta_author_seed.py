@@ -100,6 +100,10 @@ def test_author_seed_emits_normalized_creator_payload() -> None:
     assert seed["evidence_refs"] == ["run_01"]
     assert seed["creator_input"]["recommended_mode"] == "PERSISTED_PROPOSAL"
     assert json.loads(seed["creator_input"]["draft_seed_json"])["goal"] == seed["goal"]
+    assert (
+        json.loads(seed["creator_input"]["draft_seed_json"])["duplicate_detection"]
+        == seed["duplicate_detection"]
+    )
 
 
 def test_author_seed_preserves_legacy_keys() -> None:
@@ -127,6 +131,28 @@ def test_author_seed_refuses_failed_or_empty_trace() -> None:
     assert no_steps["status"] == "cannot_draft"
     assert no_steps["reason"] == "missing_observed_steps"
     assert "creator_input" not in no_steps
+
+    failed_steps = draft_meta_skill_seed(replace(
+        _record(),
+        steps=(
+            replace(_record().steps[0], status="failed", error="boom"),
+            replace(_record().steps[1], status="skipped"),
+        ),
+    ))
+    assert failed_steps["status"] == "cannot_draft"
+    assert failed_steps["reason"] == "missing_successful_observed_step"
+    assert "creator_input" not in failed_steps
+
+    mixed_steps = draft_meta_skill_seed(replace(
+        _record(),
+        steps=(
+            replace(_record().steps[0], status="ok"),
+            replace(_record().steps[1], status="running"),
+        ),
+    ))
+    assert mixed_steps["status"] == "cannot_draft"
+    assert mixed_steps["reason"] == "incoherent_observed_steps"
+    assert "creator_input" not in mixed_steps
 
 
 def test_author_seed_scrubs_secret_and_file_like_literals() -> None:
@@ -182,6 +208,37 @@ def test_author_seed_scrubs_plan_derived_payloads() -> None:
     assert "[secret]" in payload
     assert "[file]" in payload
     assert seed["outputs"] == ["Evidence from [file]"]
+    assert seed["privacy_warnings"] == ["secret_like_text_redacted", "file_path_redacted"]
+
+
+def test_author_seed_scrubs_final_text_goal_fallback() -> None:
+    plan = MetaPlan(
+        name="meta-vendor-brief",
+        triggers=("vendor decision brief",),
+        priority=10,
+        steps=(MetaStep(id="search", skill="web-search", kind="agent", label="Search"),),
+        request_template={},
+        output_contract={},
+        eval_prompts=(),
+    )
+    seed = draft_meta_skill_seed(replace(
+        _record(user_message=""),
+        plan_snapshot_json=json.dumps(to_jsonable(plan)),
+        inputs_json=json.dumps({}),
+        final_text=(
+            "Use ghp_1234567890abcdef and inspect "
+            "/home/alice/private/customer_contract.pdf"
+        ),
+    ))
+
+    payload = json.dumps(seed, ensure_ascii=False)
+    assert "ghp_1234567890abcdef" not in payload
+    assert "/home/alice/private" not in payload
+    assert seed["goal"] == "Use [secret] and inspect [file]"
+    assert seed["negative_cases"] == [
+        "Requests unrelated to this goal: Use [secret] and inspect [file]"
+    ]
+    assert json.loads(seed["creator_input"]["draft_seed_json"])["goal"] == seed["goal"]
     assert seed["privacy_warnings"] == ["secret_like_text_redacted", "file_path_redacted"]
 
 

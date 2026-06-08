@@ -219,7 +219,10 @@ async def _handle_meta_runs_draft(params: Any, ctx: RpcContext) -> dict[str, Any
     writer = _writer_from_context(ctx)
     p = params if isinstance(params, dict) else {}
     run_id = str(p.get("runId") or p.get("run_id") or "")
-    include_creator_input = bool(p.get("includeCreatorInput") or p.get("include_creator_input"))
+    include_creator_input = (
+        _truthy_opt_in(p.get("includeCreatorInput"))
+        or _truthy_opt_in(p.get("include_creator_input"))
+    )
     record = writer.get_run(run_id)
     if record is None:
         payload = {"draft": None}
@@ -234,6 +237,14 @@ async def _handle_meta_runs_draft(params: Any, ctx: RpcContext) -> dict[str, Any
     if include_creator_input:
         payload["creator_input"] = draft.get("creator_input")
     return payload
+
+
+def _truthy_opt_in(value: Any) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str):
+        return value.strip().casefold() in {"1", "true", "yes", "on"}
+    return False
 
 
 @_d.method("meta.runs.confirm_preflight", scope="operator.admin")

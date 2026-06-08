@@ -18,6 +18,8 @@ _SECRET_LITERAL_RE = re.compile(
 )
 _FILE_PATH_RE = re.compile(r"(?:/[A-Za-z0-9._\- ]+){2,}\.[A-Za-z0-9]{1,8}")
 _DUPLICATE_THRESHOLD = 0.75
+_SUCCESSFUL_STEP_STATUSES = {"ok", "substituted"}
+_INCOHERENT_STEP_STATUSES = {"failed", "running"}
 
 
 def draft_meta_skill_seed(
@@ -56,7 +58,13 @@ def draft_meta_skill_seed(
         output_warnings,
         eval_warnings,
     )
-    goal = _seed_goal(record, request_template, user_message)
+    goal, goal_warnings = _seed_goal(record, request_template, user_message)
+    privacy_warnings = _merge_warnings(privacy_warnings, goal_warnings)
+    duplicate_detection = _detect_duplicate(
+        goal,
+        trigger_candidates,
+        existing_specs=existing_specs,
+    )
     normalized = _normalized_seed(
         record,
         plan=plan,
@@ -66,8 +74,9 @@ def draft_meta_skill_seed(
         output_contract=output_contract,
         eval_prompts=eval_prompts,
     )
+    normalized["duplicate_detection"] = duplicate_detection
     creator_input = {
-        "user_message": user_message,
+        "user_message": user_message or goal,
         "draft_seed_json": json.dumps(
             normalized,
             sort_keys=True,
@@ -79,11 +88,6 @@ def draft_meta_skill_seed(
         "status": "ok",
         **normalized,
         **({"privacy_warnings": privacy_warnings} if privacy_warnings else {}),
-        "duplicate_detection": _detect_duplicate(
-            goal,
-            trigger_candidates,
-            existing_specs=existing_specs,
-        ),
         "creator_input": creator_input,
         "source_run": _source_run(record),
         "name": f"{_slug(record.meta_skill_name)}-draft",
@@ -224,6 +228,10 @@ def _can_draft(record: RunRecord, scrubbed_user_message: str) -> str | None:
         return "missing_goal_or_output"
     if not record.steps:
         return "missing_observed_steps"
+    if not any(step.status in _SUCCESSFUL_STEP_STATUSES for step in record.steps):
+        return "missing_successful_observed_step"
+    if any(step.status in _INCOHERENT_STEP_STATUSES for step in record.steps):
+        return "incoherent_observed_steps"
     return None
 
 
@@ -324,14 +332,14 @@ def _seed_goal(
     record: RunRecord,
     request_template: dict[str, Any],
     user_message: str,
-) -> str:
+) -> tuple[str, list[str]]:
     if user_message:
-        return user_message
+        return user_message, []
     if request_template.get("outcome"):
-        return str(request_template["outcome"]).strip()
+        return str(request_template["outcome"]).strip(), []
     if record.final_text:
-        return record.final_text.strip()
-    return _draft_base_name(record.meta_skill_name).replace("-", " ").strip()
+        return _scrub_text(record.final_text)
+    return _draft_base_name(record.meta_skill_name).replace("-", " ").strip(), []
 
 
 def _json_obj(raw: str) -> dict[str, Any]:

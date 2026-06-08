@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let a successful conversation or persisted MetaSkill run become a structured draft seed that the existing `meta-skill-creator` DAG can consume, while refusing incoherent traces, surfacing duplicates as patch targets, scrubbing sensitive source text, and preserving the P0 generation and activation gates before reviewer acceptance.
+**Goal:** Let a successful persisted MetaSkill run become a structured draft seed that the existing `meta-skill-creator` DAG can consume, while refusing incoherent traces, surfacing duplicates as patch targets, scrubbing sensitive source text, and preserving the P0 generation and activation gates before reviewer acceptance. Successful conversations enter this P1 path only after they have been materialized as MetaSkill run records; a direct session/conversation draft endpoint is intentionally out of scope for this plan because it crosses the separate session transcript API and permission boundary.
 
 **Architecture:** Build P1 on the existing `src/opensquilla/skills/meta/author_seed.py` boundary instead of adding a parallel creator. The author seed helper will emit a normalized `MetaSkillDraftSeed`-compatible payload, existing CLI/RPC draft endpoints will expose creator-ready input, and `meta_skill_fill_slots` plus the bundled `meta-skill-creator` DAG will accept an optional `draft_seed_json` input so seeded drafts still pass through P0 `generation_quality` and `activation_eval` before persistence or acceptance.
 
