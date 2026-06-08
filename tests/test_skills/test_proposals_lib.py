@@ -337,12 +337,100 @@ def test_full_gated_runtime_e2e_allows_meta_winner_when_acceptance_passes(
         },
         collision_result="PASS: no trigger collision",
         risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        generation_quality_result={"required": True, "passed": True, "reason": "ok"},
+        activation_result={"required": True, "passed": True, "reason": "ok"},
     )
 
     assert result["auto_enable_eligible"] is True
     shown = proposals_lib.show_proposal(home, result["proposal_id"])
     assert shown["gates"]["acceptance_compare"]["passed"] is True
     assert shown["gates"]["runtime_e2e"]["passed"] is True
+    assert shown["gates"]["generation_quality"]["passed"] is True
+    assert shown["gates"]["activation_eval"]["passed"] is True
+
+
+def test_write_proposal_persists_generation_and_activation_gates(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        creator_mode="PERSISTED_PROPOSAL",
+        collision_result="PASS",
+        risk_result="RISK: low",
+        generation_quality_result={
+            "required": True,
+            "passed": True,
+            "reason": "ok",
+            "failures": [],
+        },
+        activation_result=json.dumps({
+            "required": True,
+            "passed": True,
+            "reason": "ok",
+            "true_positive_rate": 1.0,
+            "false_positive_rate": 0.0,
+        }),
+    )
+
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    assert shown["gates"]["generation_quality"]["passed"] is True
+    assert shown["gates"]["activation_eval"]["true_positive_rate"] == 1.0
+
+
+def test_write_proposal_blocks_failed_activation_gate(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        creator_mode="PERSISTED_PROPOSAL",
+        collision_result="PASS",
+        risk_result="RISK: low",
+        generation_quality_result={"required": True, "passed": True, "reason": "ok"},
+        activation_result={
+            "required": True,
+            "passed": False,
+            "reason": "activation_failed",
+            "failures": ["false_positive_rate_above_threshold"],
+        },
+    )
+
+    assert result["auto_enable_eligible"] is False
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    assert shown["gates"]["activation_eval"]["passed"] is False
+
+
+def test_write_proposal_requires_generation_and_activation_in_creator_modes(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    for creator_mode in ("PERSISTED_PROPOSAL", "FULL_GATED"):
+        result = proposals_lib.write_proposal(
+            home,
+            SAMPLE_SKILL_MD,
+            GATES_PASSING,
+            SMOKE_PASSING,
+            creator_mode=creator_mode,
+            collision_result="PASS",
+            risk_result="RISK: low",
+        )
+
+        assert result["auto_enable_eligible"] is False
+        shown = proposals_lib.show_proposal(home, result["proposal_id"])
+        assert shown["gates"]["generation_quality"]["required"] is True
+        assert shown["gates"]["generation_quality"]["passed"] is False
+        assert (
+            shown["gates"]["generation_quality"]["reason"]
+            == "missing_generation_quality_result"
+        )
+        assert shown["gates"]["activation_eval"]["required"] is True
+        assert shown["gates"]["activation_eval"]["passed"] is False
+        assert shown["gates"]["activation_eval"]["reason"] == "missing_activation_result"
 
 
 def test_show_rejects_invalid_id(tmp_path: Path) -> None:

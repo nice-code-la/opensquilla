@@ -227,6 +227,32 @@ def _normalise_runtime_e2e_result(runtime_e2e_result: object) -> dict:
     return {"raw": str(runtime_e2e_result)}
 
 
+def _normalise_gate_payload(
+    value: object, *, required: bool, missing_reason: str,
+) -> dict:
+    if value is None or value == "":
+        return {
+            "required": required,
+            "passed": not required,
+            "reason": missing_reason if required else "not_required",
+        }
+    if isinstance(value, dict):
+        payload = dict(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            parsed = {"raw": text}
+        payload = dict(parsed) if isinstance(parsed, dict) else {"raw": text}
+    else:
+        payload = {"raw": str(value)}
+    payload.setdefault("required", required)
+    payload.setdefault("passed", bool(payload.get("passed", False)))
+    payload.setdefault("reason", "ok" if payload.get("passed") else missing_reason)
+    return payload
+
+
 def _evaluate_runtime_e2e(
     creator_mode: str,
     runtime_e2e_result: object,
@@ -287,12 +313,26 @@ def write_proposal(
     runtime_e2e_result: object = None,
     collision_result: object = None,
     risk_result: object = None,
+    generation_quality_result: object = None,
+    activation_result: object = None,
 ) -> dict:
     """Atomic write + return the standard ``{status, proposal_id, ...}`` shape."""
+    mode = (creator_mode or "").strip().upper()
     acceptance_gate = _evaluate_acceptance_compare(creator_mode, acceptance_result)
     runtime_gate = _evaluate_runtime_e2e(creator_mode, runtime_e2e_result)
     collision_gate = _evaluate_collision_check(creator_mode, collision_result)
     risk_gate = _evaluate_risk_classify(creator_mode, risk_result)
+    creator_quality_required = mode in {"FULL_GATED", "PERSISTED_PROPOSAL"}
+    generation_quality_gate = _normalise_gate_payload(
+        generation_quality_result,
+        required=creator_quality_required,
+        missing_reason="missing_generation_quality_result",
+    )
+    activation_gate = _normalise_gate_payload(
+        activation_result,
+        required=creator_quality_required,
+        missing_reason="missing_activation_result",
+    )
     # D1: ``degraded`` smoke (no fixture LLM available → deterministic
     # stub fixtures) flags G3/G4 as ``passed: True`` even though no
     # cross-vendor verification actually happened. Treating it as
@@ -315,6 +355,8 @@ def write_proposal(
         and bool(risk_gate.get("passed", False))
         and bool(acceptance_gate.get("passed", False))
         and bool(runtime_gate.get("passed", False))
+        and bool(generation_quality_gate.get("passed", False))
+        and bool(activation_gate.get("passed", False))
     )
     gates = {
         "lint": lint_result,
@@ -323,6 +365,8 @@ def write_proposal(
         "risk_classify": risk_gate,
         "acceptance_compare": acceptance_gate,
         "runtime_e2e": runtime_gate,
+        "generation_quality": generation_quality_gate,
+        "activation_eval": activation_gate,
         "auto_enable_eligible": eligible,
     }
     proposal_id = atomic_write_proposal(home, skill_md, gates)

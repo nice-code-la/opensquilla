@@ -45,6 +45,8 @@ def cmd_write_proposal(args: argparse.Namespace) -> dict:
         runtime_e2e_result=args.runtime_e2e_result,
         collision_result=args.collision_result,
         risk_result=args.risk_result,
+        generation_quality_result=args.generation_quality_result,
+        activation_result=args.activation_result,
     )
 
 
@@ -97,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--runtime-e2e-result", default="")
     p.add_argument("--collision-result", default="")
     p.add_argument("--risk-result", default="")
+    p.add_argument("--generation-quality-result", default=None)
+    p.add_argument("--activation-result", default=None)
     p.add_argument("--proposal-id", default=None)
     p.add_argument("--force", action="store_true")
     args = p.parse_args(argv)
