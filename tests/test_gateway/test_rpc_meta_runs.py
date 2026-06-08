@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -165,6 +166,22 @@ def test_meta_runs_draft_rpc_returns_author_seed(tmp_path: Path) -> None:
     assert draft["name"] == "alpha-skill-draft"
     assert draft["request_template"]["outcome"] == "Brief"
     assert draft["eval_prompts"][0]["name"] == "brief"
+
+
+def test_meta_runs_draft_rpc_returns_creator_input_when_requested(tmp_path: Path) -> None:
+    writer, run_id = _seed_writer(tmp_path)
+    try:
+        ctx = RpcContext(conn_id="test", meta_run_writer=writer)
+        payload = asyncio.run(_handle_meta_runs_draft({
+            "runId": run_id,
+            "includeCreatorInput": True,
+        }, ctx))
+    finally:
+        writer.close()
+
+    assert payload["draft"]["source_run"]["run_id"] == run_id
+    assert payload["creator_input"]["recommended_mode"] == "PERSISTED_PROPOSAL"
+    assert json.loads(payload["creator_input"]["draft_seed_json"])["evidence_refs"] == [run_id]
 
 
 def test_meta_runs_confirm_preflight_requires_template_fields(tmp_path: Path) -> None:

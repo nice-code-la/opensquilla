@@ -233,6 +233,11 @@ def runs_steps(
 def runs_draft(
     run_id: str = typer.Argument(...),
     json_out: bool = typer.Option(False, "--json"),
+    creator_input: bool = typer.Option(
+        False,
+        "--creator-input",
+        help="Emit creator-ready persisted-proposal input from the draft seed.",
+    ),
 ) -> None:
     """Draft a meta-skill authoring seed from a historical run."""
     writer = _open_writer()
@@ -245,6 +250,16 @@ def runs_draft(
         raise typer.Exit(2)
 
     seed = draft_meta_skill_seed(rec, existing_specs=_loaded_specs_for_conflicts())
+    if creator_input:
+        if json_out:
+            typer.echo(json.dumps({
+                "draft": seed,
+                "creator_input": seed.get("creator_input"),
+            }, default=str))
+        else:
+            typer.echo(json.dumps(seed.get("creator_input"), indent=2, default=str))
+        return
+
     if json_out:
         typer.echo(json.dumps(seed, default=str))
         return

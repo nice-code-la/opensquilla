@@ -219,15 +219,21 @@ async def _handle_meta_runs_draft(params: Any, ctx: RpcContext) -> dict[str, Any
     writer = _writer_from_context(ctx)
     p = params if isinstance(params, dict) else {}
     run_id = str(p.get("runId") or p.get("run_id") or "")
+    include_creator_input = bool(p.get("includeCreatorInput") or p.get("include_creator_input"))
     record = writer.get_run(run_id)
     if record is None:
-        return {"draft": None}
-    return {
-        "draft": draft_meta_skill_seed(
-            record,
-            existing_specs=_existing_specs(ctx),
-        ),
-    }
+        payload = {"draft": None}
+        if include_creator_input:
+            payload["creator_input"] = None
+        return payload
+    draft = draft_meta_skill_seed(
+        record,
+        existing_specs=_existing_specs(ctx),
+    )
+    payload = {"draft": draft}
+    if include_creator_input:
+        payload["creator_input"] = draft.get("creator_input")
+    return payload
 
 
 @_d.method("meta.runs.confirm_preflight", scope="operator.admin")

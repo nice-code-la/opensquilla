@@ -141,6 +141,26 @@ def test_runs_draft_json(runner: CliRunner, seeded_db) -> None:
     assert data["trigger_candidates"]
 
 
+def test_runs_draft_creator_input_json(runner: CliRunner, seeded_db) -> None:
+    result = runner.invoke(
+        cli_app,
+        [
+            "skills",
+            "meta",
+            "runs",
+            "draft",
+            seeded_db["rid_ok"],
+            "--creator-input",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["draft"]["source_run"]["run_id"] == seeded_db["rid_ok"]
+    assert data["creator_input"]["recommended_mode"] == "PERSISTED_PROPOSAL"
+    assert json.loads(data["creator_input"]["draft_seed_json"])["source_kind"] == "meta_run"
+
+
 def test_runs_draft_non_json_handles_cannot_draft(runner: CliRunner, seeded_db) -> None:
     result = runner.invoke(cli_app, ["skills", "meta", "runs", "draft", seeded_db["rid_fail"]])
 
