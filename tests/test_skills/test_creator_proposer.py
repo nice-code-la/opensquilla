@@ -117,6 +117,9 @@ def test_creator_package_import_registers_tools() -> None:
     )
     assert "meta_skill_fill_slots" in names, "meta_skill_fill_slots not registered"
     assert "meta_skill_patch_proposal" in names, "meta_skill_patch_proposal not registered"
+    assert "meta_skill_extract_proposal_id" in names, (
+        "meta_skill_extract_proposal_id not registered"
+    )
 
 
 def test_meta_skill_fill_slots_retries_once_on_validation_error(monkeypatch) -> None:
@@ -175,6 +178,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
         "meta_skill_assemble",
         "meta_skill_fill_slots",
         "meta_skill_patch_proposal",
+        "meta_skill_extract_proposal_id",
     ):
         assert tool_name not in visible_names, (
             f"{tool_name} is visible in the default owner tool catalog; "
@@ -187,6 +191,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
     assert "meta_skill_assemble" in registered_names
     assert "meta_skill_fill_slots" in registered_names
     assert "meta_skill_patch_proposal" in registered_names
+    assert "meta_skill_extract_proposal_id" in registered_names
 
 
 def test_resolve_provider_config_honors_env_overrides(monkeypatch, tmp_path) -> None:
@@ -340,6 +345,9 @@ def test_creator_tools_registered_via_meta_invoke_module_import() -> None:
     )
     assert "meta_skill_patch_proposal" in names, (
         "N10: meta_skill_patch_proposal not registered via soft-path import"
+    )
+    assert "meta_skill_extract_proposal_id" in names, (
+        "N10: meta_skill_extract_proposal_id not registered via soft-path import"
     )
 
 
@@ -942,6 +950,17 @@ composition:
     gates = json.loads((child_dir / "gates.json").read_text(encoding="utf-8"))
     assert gates["creator_mode"] == "PATCH_PROPOSAL"
     assert gates["revision"]["owner"] == "test-operator"
+
+
+def test_extract_proposal_id_prefers_explicit_fallback() -> None:
+    from opensquilla.skills.creator import proposer
+
+    assert proposer.meta_skill_extract_proposal_id(
+        "revise proposal abcd1234",
+        fallback="deadbeef",
+    ) == "deadbeef"
+    assert proposer.meta_skill_extract_proposal_id("revise proposal abcd1234") == "abcd1234"
+    assert proposer.meta_skill_extract_proposal_id("revise proposal ABCD1234") == ""
 
 
 def test_patch_proposal_tool_wrapper_uses_default_state_home(

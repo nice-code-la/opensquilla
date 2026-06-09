@@ -1,6 +1,6 @@
 ---
 name: meta-skill-creator
-description: "Use this meta-skill instead of answering directly only when the current user explicitly asks to create, compose, synthesize, or propose a new meta-skill that orchestrates multiple existing skills. It uses multi-skill orchestration for intent clarification, optional history mining, trigger-collision checks, linting, smoke/runtime gates, preview, and optional proposal persistence. Do not use it for creating a normal standalone skill, asking how meta-skills work, analyzing pasted skill lists, or discussing existing meta-skills."
+description: "Use this meta-skill instead of answering directly only when the current user explicitly asks to create, compose, synthesize, or propose a new meta-skill that orchestrates multiple existing skills, or to revise/patch an existing pending meta-skill proposal. It uses multi-skill orchestration for intent clarification, optional history mining, trigger-collision checks, linting, smoke/runtime gates, preview, optional proposal persistence, and reviewable proposal revisions. Do not use it for creating a normal standalone skill, asking how meta-skills work, analyzing pasted skill lists, or discussing existing meta-skills without requesting a pending proposal revision."
 kind: meta
 meta_priority: 90
 always: false
@@ -100,6 +100,9 @@ triggers:
   - "compose existing skills"
   - "synthesize meta-skill"
   - "compose meta-skill"
+  - "revise meta-skill proposal"
+  - "patch meta-skill proposal"
+  - "update pending meta-skill proposal"
 provenance:
   origin: opensquilla-original
   license: Apache-2.0
@@ -292,15 +295,29 @@ composition:
           Optional owner:
           {{ inputs.owner | default("") | xml_escape | truncate(200) }}
 
+    - id: extract_patch_target
+      label: "提取修订目标"
+      label_en: "Extract patch target"
+      kind: tool_call
+      depends_on: [creator_mode]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'PATCH_PROPOSAL'"
+      tool: meta_skill_extract_proposal_id
+      tool_args:
+        text: |
+          {{ inputs.user_message | xml_escape | truncate(1200) }}
+
+          {{ outputs.clarify_intent | truncate(1000) }}
+        fallback: "{{ inputs.target_proposal_id | default(inputs.proposal_id | default('')) }}"
+
     - id: patch_proposal
       label: "修订提案"
       label_en: "Patch proposal"
       kind: tool_call
-      depends_on: [build_patch_request]
+      depends_on: [extract_patch_target, build_patch_request]
       when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'PATCH_PROPOSAL'"
       tool: meta_skill_patch_proposal
       tool_args:
-        proposal_id: "{{ inputs.target_proposal_id | default(inputs.proposal_id | default('')) }}"
+        proposal_id: "{{ outputs.extract_patch_target }}"
         patch_json: "{{ outputs.build_patch_request }}"
         home: "{{ inputs.home | default('') }}"
 

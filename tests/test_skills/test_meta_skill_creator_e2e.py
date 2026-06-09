@@ -309,15 +309,20 @@ def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
     assert "outputs.creator_mode == 'PATCH_PROPOSAL'" in steps["build_patch_request"].when
     assert "Allowed keys:" in str(steps["build_patch_request"].with_args["task"])
 
+    extract = steps["extract_patch_target"]
+    assert extract.kind == "tool_call"
+    assert extract.tool == "meta_skill_extract_proposal_id"
+    assert extract.depends_on == ("creator_mode",)
+    assert "outputs.creator_mode == 'PATCH_PROPOSAL'" in extract.when
+    assert "inputs.user_message" in str(extract.tool_args["text"])
+    assert "inputs.target_proposal_id" in str(extract.tool_args["fallback"])
+
     patch = steps["patch_proposal"]
     assert patch.kind == "tool_call"
     assert patch.tool == "meta_skill_patch_proposal"
-    assert patch.depends_on == ("build_patch_request",)
-    proposal_id_template = (
-        "{{ inputs.target_proposal_id | default(inputs.proposal_id | default('')) }}"
-    )
+    assert patch.depends_on == ("extract_patch_target", "build_patch_request")
     assert patch.tool_args == {
-        "proposal_id": proposal_id_template,
+        "proposal_id": "{{ outputs.extract_patch_target }}",
         "patch_json": "{{ outputs.build_patch_request }}",
         "home": "{{ inputs.home | default('') }}",
     }
@@ -340,6 +345,118 @@ def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
 
     assert "patch_proposal" in steps["final_response"].depends_on
     assert "outputs.patch_proposal" in str(steps["final_response"].tool_args["text"])
+
+
+async def test_orchestrator_patches_proposal_id_from_user_message(tmp_path, monkeypatch) -> None:
+    home = tmp_path / ".opensquilla"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+
+    from opensquilla.skills import proposals_lib
+
+    parent = proposals_lib.write_proposal(
+        home,
+        """---
+name: synth-user-message-patch
+description: "Meta-skill proposal patched from a natural-language request."
+kind: meta
+meta_priority: 50
+triggers:
+  - "user message patch"
+composition:
+  steps:
+    - id: digest
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+""",
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+        creator_mode="PERSISTED_PROPOSAL",
+        generation_quality_result={"passed": True},
+        activation_result={"passed": True},
+    )
+
+    loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
+    loader.invalidate_cache()
+    creator_spec = loader.get_by_name("meta-skill-creator")
+    assert creator_spec is not None
+    plan = parse_meta_plan(creator_spec)
+    assert plan is not None
+
+    async def stub_agent_runner(system_prompt: str, user_prompt: str):
+        raise AssertionError("patch branch should not start agent steps")
+
+    async def stub_llm_chat(system_prompt: str, user_prompt: str) -> str:
+        if "Clarify whether the user wants a meta-skill" in user_prompt:
+            return (
+                "ROUTE: meta-skill\n"
+                "WORKFLOW_GOAL: revise pending proposal\n"
+                "OUTPUT_SHAPE: revised proposal\n"
+                f"TRIGGERS: proposal {parent['proposal_id']}\n"
+                "HUMAN_PREFERENCE_BRANCH: no\n"
+                "NEEDS_CLARIFICATION: no\n"
+                "MISSING_FIELDS:\n"
+                "  - none\n"
+                "CLARIFY_REASON: none"
+            )
+        if "Classify how far the creator workflow should go" in user_prompt:
+            return "PATCH_PROPOSAL"
+        if "Return only a JSON object" in user_prompt:
+            return '{"add_triggers": ["user message patch revised"]}'
+        raise AssertionError(f"unexpected llm prompt: {user_prompt[:200]}")
+
+    async def stub_tool_invoker(tool_name: str, args: dict) -> str:
+        if tool_name == "emit_text":
+            return str(args.get("text", ""))
+        if tool_name == "meta_skill_extract_proposal_id":
+            from opensquilla.skills.creator.proposer import meta_skill_extract_proposal_id
+
+            return meta_skill_extract_proposal_id(
+                str(args.get("text", "")),
+                str(args.get("fallback", "")),
+            )
+        if tool_name == "meta_skill_patch_proposal":
+            from opensquilla.skills.creator.proposer import meta_skill_patch_proposal
+
+            return meta_skill_patch_proposal(
+                str(args["proposal_id"]),
+                str(args["patch_json"]),
+                str(args.get("home", "")),
+            )
+        raise AssertionError(f"patch branch should not call {tool_name}")
+
+    orchestrator = MetaOrchestrator(
+        agent_runner=stub_agent_runner,
+        skill_loader=loader,
+        llm_chat=stub_llm_chat,
+        tool_invoker=stub_tool_invoker,
+    )
+    match = MetaMatch(
+        plan=plan,
+        inputs={
+            "user_message": (
+                f"请修订 proposal {parent['proposal_id']}，添加触发词 "
+                "user message patch revised"
+            ),
+        },
+    )
+
+    final_result = None
+    async for event in orchestrator.iter_events(match):
+        if isinstance(event, MetaResult):
+            final_result = event
+
+    assert final_result is not None
+    assert final_result.ok, final_result.error
+    patch_payload = json.loads(final_result.step_outputs["patch_proposal"])
+    assert patch_payload["status"] == "ok"
+    assert patch_payload["parent_proposal_id"] == parent["proposal_id"]
+    assert final_result.step_outputs["persist"] == ""
+    child_dir = home / "proposals" / patch_payload["proposal_id"]
+    assert "user message patch revised" in (
+        child_dir / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_manual_creator_persist_auto_enables_when_setting_is_on(tmp_path) -> None:

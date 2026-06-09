@@ -588,6 +588,15 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     assert "unattended auto-propose" in creator_mode_text
     assert "dream" in creator_mode_text
     assert "cron" in creator_mode_text
+    assert "pending meta-skill proposal" in (
+        steps["clarify_intent"].with_args["task"]
+    ).lower()
+    assert "PATCH_PROPOSAL" in creator_mode_text
+    spec = loader.get_by_name("meta-skill-creator")
+    assert spec is not None
+    assert "pending meta-skill proposal" in spec.description
+    assert "revise meta-skill proposal" in spec.triggers
+    assert "patch meta-skill proposal" in spec.triggers
     assert steps["clarify_intent"].kind == "llm_chat"
     assert steps["collision_check"].kind == "llm_chat"
     assert steps["risk_classify"].kind == "llm_chat"
@@ -597,6 +606,7 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     creation_steps = {
         "creator_mode",
         "build_patch_request",
+        "extract_patch_target",
         "patch_proposal",
         "harvest",
         "pick_pattern",
@@ -616,6 +626,7 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
         assert "route: meta-skill" in steps[step_id].when
     assert "Unattended meta-skill auto-propose run" in steps["harvest"].when
     assert "outputs.creator_mode == 'PATCH_PROPOSAL'" in steps["build_patch_request"].when
+    assert steps["extract_patch_target"].tool == "meta_skill_extract_proposal_id"
     assert steps["patch_proposal"].tool == "meta_skill_patch_proposal"
     assert "outputs.creator_mode != 'PREVIEW_ONLY'" in steps["smoke"].when
     assert "outputs.creator_mode != 'PREVIEW_ONLY'" in steps["persist"].when
@@ -649,7 +660,12 @@ def test_meta_skill_creator_acceptance_compares_against_highest_tier_baseline(
     assert "outputs." not in str(baseline.with_args)
 
     assert compare.kind == "llm_chat"
-    assert set(compare.depends_on) == {"assemble", "single_model_baseline"}
+    assert set(compare.depends_on) == {
+        "assemble",
+        "single_model_baseline",
+        "generation_quality",
+        "activation_eval",
+    }
     assert "route: meta-skill" in compare.when
     assert "outputs.creator_mode == 'FULL_GATED'" in compare.when
     assert "orchestrated candidate" in str(compare.with_args).lower()

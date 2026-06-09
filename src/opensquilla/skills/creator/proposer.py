@@ -1062,6 +1062,20 @@ def meta_skill_patch_proposal(
     return json.dumps(result, ensure_ascii=False)
 
 
+def meta_skill_extract_proposal_id(text: str, fallback: str = "") -> str:
+    """Extract the first valid pending-proposal id from explicit inputs or text."""
+    from opensquilla.skills.proposals_lib import is_valid_proposal_id
+
+    candidate = (fallback or "").strip()
+    if is_valid_proposal_id(candidate):
+        return candidate
+    for match in _re.finditer(r"(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])", text or ""):
+        proposal_id = match.group(0)
+        if is_valid_proposal_id(proposal_id):
+            return proposal_id
+    return ""
+
+
 def _maybe_auto_enable_manual_proposal(
     home: Path,
     proposal_id: str,
@@ -1359,6 +1373,26 @@ async def meta_skill_patch_proposal_tool(
         patch_json,
         home,
     )
+
+
+@tool(
+    name="meta_skill_extract_proposal_id",
+    description=(
+        "Extract the first valid 8-hex pending proposal id from a user message "
+        "or explicit fallback string."
+    ),
+    params={
+        "text": {"type": "string"},
+        "fallback": {"type": "string"},
+    },
+    required=["text"],
+    exposed_by_default=False,
+)
+async def meta_skill_extract_proposal_id_tool(
+    text: str,
+    fallback: str = "",
+) -> str:
+    return meta_skill_extract_proposal_id(text, fallback)
 
 
 _PATTERN_ENUM = sorted(PATTERN_SLOT_SCHEMA.keys())
