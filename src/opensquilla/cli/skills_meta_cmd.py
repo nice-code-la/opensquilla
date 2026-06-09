@@ -625,14 +625,17 @@ def _load_json_option(raw: str | None, option_name: str) -> object:
 @meta_app.command("proposals")
 def proposals_cmd(
     action: str = typer.Argument(
-        ..., help="list | accept | show | patch | benchmark — proposal CRUD action",
+        ..., help="list | accept | show | patch | benchmark | rollback — proposal CRUD action",
     ),
     proposal_id: str | None = typer.Argument(
         None,
-        help="8-hex proposal id (required for accept/show/patch)",
+        help="8-hex proposal id, or skill name for rollback",
     ),
     force: bool = typer.Option(
         False, "--force", help="Accept even when gates did not all pass",
+    ),
+    replace: bool = typer.Option(
+        False, "--replace", help="Replace an existing managed skill with rollback metadata",
     ),
     patch_json: str | None = typer.Option(
         None, "--patch-json", help="Inline proposal patch JSON object",
@@ -661,6 +664,7 @@ def proposals_cmd(
     ``proposals accept <id> [--force]`` — promote to MANAGED-layer skill
     ``proposals patch <id> --patch-json '{...}'`` — create a proposal revision
     ``proposals benchmark <baseline-id> --candidate-id <id>`` — record A/B report
+    ``proposals rollback <skill-name>`` — restore a managed skill's rollback target
     """
     import json as _json
     import re
@@ -705,13 +709,18 @@ def proposals_cmd(
             )
         return
 
-    if action in ("show", "accept", "patch", "benchmark") and not proposal_id:
-        typer.echo(f"Error: '{action}' requires a proposal_id argument", err=True)
+    if action in ("show", "accept", "patch", "benchmark", "rollback") and not proposal_id:
+        required_arg = "skill name" if action == "rollback" else "proposal_id"
+        typer.echo(f"Error: '{action}' requires a {required_arg} argument", err=True)
         raise typer.Exit(2)
 
     # ID format check defends against path-traversal — mirrors the script's
     # I1 hardening (uuid.uuid4().hex[:8] write side, 8 hex on read side).
-    if proposal_id and not re.fullmatch(r"[0-9a-f]{8}", proposal_id):
+    if (
+        proposal_id
+        and action != "rollback"
+        and not re.fullmatch(r"[0-9a-f]{8}", proposal_id)
+    ):
         typer.echo(
             f"Error: invalid proposal_id {proposal_id!r} "
             "(expected 8 lowercase hex chars)",
@@ -802,8 +811,29 @@ def proposals_cmd(
         typer.echo(f"{status.title()}: {reason}", err=True)
         raise typer.Exit(1)
 
+    if action == "rollback":
+        result = proposals_lib.rollback_skill(_proposals_home(), proposal_id or "")
+        if result.get("status") != "ok":
+            reason = str(result.get("reason") or "proposal rollback failed")
+            status = str(result.get("status") or "error")
+            typer.echo(f"{status.title()}: {reason}", err=True)
+            raise typer.Exit(1)
+        typer.echo(
+            f"Rolled back skill `{result.get('name')}` "
+            f"to proposal {result.get('restored_proposal_id')}"
+        )
+        if json_out:
+            typer.echo(_json.dumps(result))
+        return
+
     # action == "accept"
-    result = proposals_lib.accept_proposal(_proposals_home(), proposal_id or "", force=force)
+    result = proposals_lib.accept_proposal(
+        _proposals_home(),
+        proposal_id or "",
+        force=force,
+        replace=replace,
+        owner=owner or "",
+    )
     if result.get("status") != "ok":
         reason = str(result.get("reason") or "proposal accept failed")
         if result.get("status") == "refused":

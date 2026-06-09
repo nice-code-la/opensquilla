@@ -86,6 +86,10 @@ def benchmarks_dir(home: Path) -> Path:
     return home / "proposal-benchmarks"
 
 
+def rollback_dir(home: Path) -> Path:
+    return home / "rollback"
+
+
 def is_valid_proposal_id(proposal_id: str | None) -> bool:
     if not proposal_id:
         return False
@@ -1151,7 +1155,70 @@ def benchmark_proposals(
     }
 
 
-def accept_proposal(home: Path, proposal_id: str, force: bool = False) -> dict:
+def _read_gates(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _proposal_id_from_gates(gates: dict) -> str:
+    lifecycle = gates.get("lifecycle")
+    if isinstance(lifecycle, dict):
+        proposal_id = str(lifecycle.get("accepted_proposal_id") or "")
+        if is_valid_proposal_id(proposal_id):
+            return proposal_id
+    auto_enable = gates.get("auto_enable")
+    if isinstance(auto_enable, dict):
+        proposal_id = str(auto_enable.get("proposal_id") or "")
+        if is_valid_proposal_id(proposal_id):
+            return proposal_id
+    return uuid.uuid4().hex[:8]
+
+
+def _archive_managed_skill(
+    home: Path,
+    skill_name: str,
+    src: Path,
+    *,
+    proposal_id: str,
+    reason: str,
+) -> dict:
+    archive_id = uuid.uuid4().hex[:8]
+    dst = rollback_dir(home) / skill_name / archive_id
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dst))
+    return {
+        "skill_name": skill_name,
+        "proposal_id": proposal_id,
+        "archive_id": archive_id,
+        "reason": reason,
+        "path": str(dst),
+    }
+
+
+def _merge_lifecycle(gates: dict, lifecycle_patch: dict) -> dict:
+    lifecycle = gates.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        lifecycle = {}
+    gates["lifecycle"] = {
+        **lifecycle,
+        **lifecycle_patch,
+    }
+    return gates
+
+
+def accept_proposal(
+    home: Path,
+    proposal_id: str,
+    force: bool = False,
+    *,
+    replace: bool = False,
+    owner: str = "",
+) -> dict:
     """Promote a proposal to the MANAGED skills layer."""
     if not is_valid_proposal_id(proposal_id):
         return {
@@ -1163,12 +1230,7 @@ def accept_proposal(home: Path, proposal_id: str, force: bool = False) -> dict:
     src = proposals_dir(home) / proposal_id
     if not (src / "SKILL.md").is_file():
         return {"status": "error", "reason": f"proposal {proposal_id} not found"}
-    gates: dict = {}
-    if (src / "gates.json").is_file():
-        try:
-            gates = json.loads((src / "gates.json").read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            gates = {}
+    gates = _read_gates(src / "gates.json")
     if _contains_stale_gate(gates):
         return {
             "status": "refused",
@@ -1190,12 +1252,58 @@ def accept_proposal(home: Path, proposal_id: str, force: bool = False) -> dict:
     name = name_match.group(1)
 
     dst = skills_dir(home) / name
-    if dst.exists():
+    rollback_target: dict | None = None
+    if dst.exists() and not replace:
         return {"status": "refused", "reason": f"skill {name} already exists at {dst}"}
+    if dst.exists():
+        existing_gates = _read_gates(dst / "gates.json")
+        existing_proposal_id = _proposal_id_from_gates(existing_gates)
+        rollback_target = _archive_managed_skill(
+            home,
+            name,
+            dst,
+            proposal_id=existing_proposal_id,
+            reason="superseded",
+        )
+        gates = _merge_lifecycle(
+            gates,
+            {
+                "status": "active",
+                "accepted_proposal_id": proposal_id,
+                "owner": owner,
+                "supersedes": {
+                    "skill_name": name,
+                    "proposal_id": existing_proposal_id,
+                    "path": rollback_target["path"],
+                },
+                "rollback_target": rollback_target,
+            },
+        )
+        (src / "gates.json").write_text(
+            json.dumps(gates, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    else:
+        gates = _merge_lifecycle(
+            gates,
+            {
+                "status": "active",
+                "accepted_proposal_id": proposal_id,
+                "owner": owner,
+            },
+        )
+        (src / "gates.json").write_text(
+            json.dumps(gates, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dst))
-    return {"status": "ok", "skill_path": str(dst), "name": name}
+    result = {"status": "ok", "skill_path": str(dst), "name": name}
+    if rollback_target is not None:
+        result["replaced"] = True
+        result["rollback_target"] = rollback_target
+    return result
 
 
 def list_auto_enabled_skills(home: Path) -> dict:
@@ -1269,6 +1377,67 @@ def disable_auto_enabled_skill(home: Path, name: str) -> dict:
     gates_path.write_text(json.dumps(gates, indent=2, ensure_ascii=False), encoding="utf-8")
     shutil.move(str(src), str(dst))
     return {"status": "ok", "proposal_id": proposal_id, "name": name}
+
+
+def rollback_skill(home: Path, name: str) -> dict:
+    """Restore a managed skill from its recorded rollback target."""
+    if not isinstance(name, str) or not SKILL_NAME_PATTERN.fullmatch(name):
+        return {"status": "error", "reason": "invalid skill name"}
+    current = skills_dir(home) / name
+    if not (current / "SKILL.md").is_file():
+        return {"status": "error", "reason": f"skill {name} not found"}
+    current_gates = _read_gates(current / "gates.json")
+    lifecycle = current_gates.get("lifecycle")
+    rollback_target = (
+        lifecycle.get("rollback_target")
+        if isinstance(lifecycle, dict)
+        else None
+    )
+    if not isinstance(rollback_target, dict):
+        return {"status": "refused", "reason": f"skill {name} has no rollback target"}
+    target_path = Path(str(rollback_target.get("path") or ""))
+    target_proposal_id = str(rollback_target.get("proposal_id") or "")
+    if not is_valid_proposal_id(target_proposal_id):
+        return {"status": "refused", "reason": "rollback target proposal_id is invalid"}
+    if not (target_path / "SKILL.md").is_file():
+        return {"status": "refused", "reason": "rollback target is missing"}
+
+    current_proposal_id = _proposal_id_from_gates(current_gates)
+    archived_current = _archive_managed_skill(
+        home,
+        name,
+        current,
+        proposal_id=current_proposal_id,
+        reason="rollback_current",
+    )
+    current.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(target_path), str(current))
+
+    restored_gates = _read_gates(current / "gates.json")
+    restored_gates = _merge_lifecycle(
+        restored_gates,
+        {
+            "status": "rolled_back_active",
+            "accepted_proposal_id": target_proposal_id,
+            "rolled_back_from": {
+                "skill_name": name,
+                "proposal_id": current_proposal_id,
+                "path": archived_current["path"],
+            },
+            "rollback_target": archived_current,
+        },
+    )
+    (current / "gates.json").write_text(
+        json.dumps(restored_gates, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {
+        "status": "ok",
+        "name": name,
+        "restored_proposal_id": target_proposal_id,
+        "skill_path": str(current),
+        "archived_current": archived_current,
+    }
 
 
 def reject_proposal(home: Path, proposal_id: str) -> dict:
@@ -1356,6 +1525,8 @@ __all__ = [
     "proposals_dir",
     "read_auto_propose_settings",
     "reject_proposal",
+    "rollback_dir",
+    "rollback_skill",
     "show_proposal",
     "skills_dir",
     "write_auto_propose_settings",

@@ -411,3 +411,82 @@ composition:
     )
     assert report["creator_mode"] == "BENCHMARK"
     assert report["gates"]["benchmark_compare"]["passed"] is True
+
+
+def test_proposals_accept_replace_and_rollback_cli(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(tmp_path))
+    original_md = """---
+name: cli-replace-target
+description: "Original CLI replacement target"
+kind: meta
+triggers:
+  - "cli replace target"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+"""
+    original = proposals_lib.write_proposal(
+        tmp_path,
+        original_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    accepted = runner.invoke(
+        cli_app,
+        ["skills", "meta", "proposals", "accept", original["proposal_id"], "--json"],
+    )
+    assert accepted.exit_code == 0, accepted.output
+
+    replacement = proposals_lib.write_proposal(
+        tmp_path,
+        original_md.replace("Original CLI", "Replacement CLI"),
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    replaced = runner.invoke(
+        cli_app,
+        [
+            "skills",
+            "meta",
+            "proposals",
+            "accept",
+            replacement["proposal_id"],
+            "--replace",
+            "--owner",
+            "cli-test",
+            "--json",
+        ],
+    )
+
+    assert replaced.exit_code == 0, replaced.output
+    # Human line is emitted first, JSON result last for historical CLI behavior.
+    replaced_json = json.loads(replaced.output.strip().splitlines()[-1])
+    assert replaced_json["replaced"] is True
+    assert replaced_json["rollback_target"]["proposal_id"] == original["proposal_id"]
+
+    rolled_back = runner.invoke(
+        cli_app,
+        [
+            "skills",
+            "meta",
+            "proposals",
+            "rollback",
+            "cli-replace-target",
+            "--json",
+        ],
+    )
+
+    assert rolled_back.exit_code == 0, rolled_back.output
+    rolled_back_json = json.loads(rolled_back.output.strip().splitlines()[-1])
+    assert rolled_back_json["restored_proposal_id"] == original["proposal_id"]
+    assert "Original CLI replacement target" in (
+        tmp_path / "skills" / "cli-replace-target" / "SKILL.md"
+    ).read_text(encoding="utf-8")

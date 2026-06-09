@@ -221,3 +221,51 @@ def test_benchmark_action_records_report(tmp_path: Path) -> None:
     assert report["creator_mode"] == "BENCHMARK"
     assert report["eval_prompts"][0]["name"] == "script-benchmark"
     assert report["gates"]["benchmark_compare"]["passed"] is True
+
+
+def test_accept_replace_and_rollback_actions_round_trip(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    first = _run(
+        "write_proposal", home=home,
+        skill_md_inline=SAMPLE_SKILL_MD,
+        lint_result=json.dumps({"G1": {"passed": True}, "G2": {"passed": True}}),
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+    )
+    first_id = first["proposal_id"]
+    accepted = _run("accept", home=home, proposal_id=first_id)
+    assert accepted["status"] == "ok"
+
+    replacement_md = SAMPLE_SKILL_MD.replace(
+        "Sample synthetic pipeline for proposals tests",
+        "Replacement synthetic pipeline for proposals tests",
+    )
+    replacement = _run(
+        "write_proposal", home=home,
+        skill_md_inline=replacement_md,
+        lint_result=json.dumps({"G1": {"passed": True}, "G2": {"passed": True}}),
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+    )
+    replacement_id = replacement["proposal_id"]
+
+    replaced = _run(
+        "accept",
+        "--replace",
+        home=home,
+        proposal_id=replacement_id,
+        owner="script-test",
+    )
+
+    assert replaced["status"] == "ok"
+    assert replaced["replaced"] is True
+    assert replaced["rollback_target"]["proposal_id"] == first_id
+
+    rolled_back = _run(
+        "rollback",
+        home=home,
+        skill_name="synth-test-pipeline",
+    )
+
+    assert rolled_back["status"] == "ok"
+    assert rolled_back["restored_proposal_id"] == first_id
+    restored = home / "skills" / "synth-test-pipeline" / "SKILL.md"
+    assert "Sample synthetic pipeline" in restored.read_text(encoding="utf-8")

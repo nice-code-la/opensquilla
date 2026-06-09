@@ -20,6 +20,7 @@ from opensquilla.skills.creator.proposer import (  # noqa: F401
     meta_skill_lint_run,
     meta_skill_patch_proposal,
     meta_skill_persist_proposal,
+    meta_skill_rollback_skill,
     meta_skill_runtime_e2e_run,
     meta_skill_smoke_run,
     simulate_meta_resolution,

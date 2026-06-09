@@ -126,6 +126,9 @@ def test_creator_package_import_registers_tools() -> None:
     assert "meta_skill_extract_benchmark_proposal_ids" in names, (
         "meta_skill_extract_benchmark_proposal_ids not registered"
     )
+    assert "meta_skill_rollback_skill" in names, (
+        "meta_skill_rollback_skill not registered"
+    )
 
 
 def test_meta_skill_fill_slots_retries_once_on_validation_error(monkeypatch) -> None:
@@ -187,6 +190,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
         "meta_skill_extract_proposal_id",
         "meta_skill_benchmark_proposals",
         "meta_skill_extract_benchmark_proposal_ids",
+        "meta_skill_rollback_skill",
     ):
         assert tool_name not in visible_names, (
             f"{tool_name} is visible in the default owner tool catalog; "
@@ -202,6 +206,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
     assert "meta_skill_extract_proposal_id" in registered_names
     assert "meta_skill_benchmark_proposals" in registered_names
     assert "meta_skill_extract_benchmark_proposal_ids" in registered_names
+    assert "meta_skill_rollback_skill" in registered_names
 
 
 def test_resolve_provider_config_honors_env_overrides(monkeypatch, tmp_path) -> None:
@@ -364,6 +369,9 @@ def test_creator_tools_registered_via_meta_invoke_module_import() -> None:
     )
     assert "meta_skill_extract_benchmark_proposal_ids" in names, (
         "N10: meta_skill_extract_benchmark_proposal_ids not registered via soft-path import"
+    )
+    assert "meta_skill_rollback_skill" in names, (
+        "N10: meta_skill_rollback_skill not registered via soft-path import"
     )
 
 
@@ -653,6 +661,7 @@ def test_creator_quality_and_activation_tools_registered() -> None:
     assert "meta_skill_generation_quality_run" in names
     assert "meta_skill_activation_eval_run" in names
     assert "meta_skill_benchmark_proposals" in names
+    assert "meta_skill_rollback_skill" in names
 
     activation_tool = reg.get("meta_skill_activation_eval_run")
     assert activation_tool is not None
@@ -663,6 +672,10 @@ def test_creator_quality_and_activation_tools_registered() -> None:
     assert benchmark_tool is not None
     assert benchmark_tool.spec.exposed_by_default is False
     assert "target_json" in benchmark_tool.spec.parameters
+    rollback_tool = reg.get("meta_skill_rollback_skill")
+    assert rollback_tool is not None
+    assert rollback_tool.spec.exposed_by_default is False
+    assert "skill_name" in rollback_tool.spec.parameters
 
 
 def test_generation_quality_tool_returns_utf8_json_string() -> None:
@@ -1117,6 +1130,57 @@ def test_extract_benchmark_proposal_ids_uses_fallbacks_then_text() -> None:
         "baseline_proposal_id": "abcd1234",
         "candidate_proposal_id": "deadbeef",
     }
+
+
+def test_rollback_skill_tool_wrapper_restores_previous_version(tmp_path) -> None:
+    from opensquilla.skills import proposals_lib
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / ".opensquilla"
+    skill_md = """---
+name: synth-wrapper-rollback
+description: "Original rollback wrapper skill."
+kind: meta
+meta_priority: 50
+triggers:
+  - "wrapper rollback"
+composition:
+  steps:
+    - id: digest
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+    original = proposals_lib.write_proposal(
+        home,
+        skill_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    assert proposals_lib.accept_proposal(home, original["proposal_id"])["status"] == "ok"
+    replacement = proposals_lib.write_proposal(
+        home,
+        skill_md.replace("Original rollback", "Replacement rollback"),
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    assert proposals_lib.accept_proposal(
+        home,
+        replacement["proposal_id"],
+        replace=True,
+    )["status"] == "ok"
+
+    out = json.loads(proposer.meta_skill_rollback_skill(
+        "synth-wrapper-rollback",
+        home=str(home),
+    ))
+
+    assert out["status"] == "ok"
+    assert out["restored_proposal_id"] == original["proposal_id"]
+    assert "Original rollback wrapper skill" in (
+        home / "skills" / "synth-wrapper-rollback" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_fill_slots_prompt_includes_draft_seed(monkeypatch) -> None:

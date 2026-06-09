@@ -1166,6 +1166,16 @@ def meta_skill_benchmark_proposals(
     return json.dumps(result, ensure_ascii=False)
 
 
+def meta_skill_rollback_skill(skill_name: str, home: str = "") -> str:
+    """Restore a managed skill from its recorded rollback target."""
+    from opensquilla.paths import default_opensquilla_home
+    from opensquilla.skills.proposals_lib import rollback_skill
+
+    home_path = Path(home).expanduser() if home else default_opensquilla_home()
+    result = rollback_skill(home_path, skill_name)
+    return json.dumps(result, ensure_ascii=False)
+
+
 def _maybe_auto_enable_manual_proposal(
     home: Path,
     proposal_id: str,
@@ -1547,6 +1557,27 @@ async def meta_skill_benchmark_proposals_tool(
         eval_prompts_json,
         home,
     )
+
+
+@tool(
+    name="meta_skill_rollback_skill",
+    description=(
+        "Restore a managed skill from its recorded rollback target. Returns JSON."
+    ),
+    params={
+        "skill_name": {"type": "string"},
+        "home": {"type": "string"},
+    },
+    required=["skill_name"],
+    exposed_by_default=False,
+)
+async def meta_skill_rollback_skill_tool(
+    skill_name: str,
+    home: str = "",
+) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(meta_skill_rollback_skill, skill_name, home)
 
 
 _PATTERN_ENUM = sorted(PATTERN_SLOT_SCHEMA.keys())

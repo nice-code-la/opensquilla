@@ -1,6 +1,6 @@
 ---
 name: skill-creator-proposals
-description: "Internal tool (not user-invocable). Called by meta-skill-creator's persist/patch/benchmark steps and by `opensquilla skills meta proposals` CLI to manage `~/.opensquilla/proposals/`: write_proposal / list / show / patch / benchmark / accept. Returns JSON."
+description: "Internal tool (not user-invocable). Called by meta-skill-creator's persist/patch/benchmark steps and by `opensquilla skills meta proposals` CLI to manage `~/.opensquilla/proposals/`: write_proposal / list / show / patch / benchmark / accept / rollback. Returns JSON."
 user-invocable: false
 disable-model-invocation: true
 provenance:
@@ -28,6 +28,10 @@ entrypoint:
     - "{{ with.runtime_e2e_result | default('') }}"
     - --proposal-id
     - "{{ with.proposal_id | default('') }}"
+    - --skill-name
+    - "{{ with.skill_name | default('') }}"
+    - --replace
+    - "{{ with.replace | default(false) }}"
     - --patch-json
     - "{{ with.patch_json | default('') }}"
     - --patch-file
@@ -55,7 +59,8 @@ CRUD for meta-skill proposal candidates at `~/.opensquilla/proposals/<id>/`.
 - `show --proposal-id <id>` — return a proposal's `SKILL.md` and gate payload
 - `patch --proposal-id <id> (--patch-json json | --patch-file path) [--owner owner]` — apply an allowlisted structured patch to a pending proposal and write a child revision with stale gates
 - `benchmark --proposal-id <baseline-id> --candidate-proposal-id <candidate-id> [--eval-prompts json --comparison-result json]` — record a non-promoting A/B report under `~/.opensquilla/proposal-benchmarks/<uuid8>/benchmark.json`, reusing proposal `eval_prompts` when explicit prompts are omitted
-- `accept --proposal-id <id> [--force]` — move proposal to `~/.opensquilla/skills/<name>/` so it gets loaded by MANAGED layer; refuses if any gate failed (unless `--force`)
+- `accept --proposal-id <id> [--force] [--replace --owner owner]` — move proposal to `~/.opensquilla/skills/<name>/` so it gets loaded by MANAGED layer; refuses if any gate failed (unless `--force`). `--replace` archives the existing managed skill and records `lifecycle.supersedes` plus a rollback target.
+- `rollback --skill-name <name>` — restore a managed skill from its recorded rollback target and archive the current revision
 
 ## Atomicity
 

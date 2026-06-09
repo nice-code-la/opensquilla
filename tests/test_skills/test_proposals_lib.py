@@ -908,6 +908,113 @@ def test_accept_refuses_when_target_skill_exists(tmp_path: Path) -> None:
     assert "already exists" in out["reason"]
 
 
+def test_accept_replace_records_supersession_and_rollback_target(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    first_id = _seed_proposal(home)
+    first = proposals_lib.accept_proposal(home, first_id)
+    assert first["status"] == "ok"
+
+    replacement_skill_md = SAMPLE_SKILL_MD.replace(
+        "Sample synthetic pipeline for proposals_lib tests",
+        "Replacement synthetic pipeline for proposals_lib tests",
+    )
+    replacement = proposals_lib.write_proposal(
+        home,
+        replacement_skill_md,
+        GATES_PASSING,
+        SMOKE_PASSING,
+    )
+    replacement_id = replacement["proposal_id"]
+
+    out = proposals_lib.accept_proposal(
+        home,
+        replacement_id,
+        replace=True,
+        owner="unit-test",
+    )
+
+    assert out["status"] == "ok"
+    assert out["name"] == "synth-test-pipeline"
+    assert out["replaced"] is True
+    rollback_target = out["rollback_target"]
+    assert rollback_target["proposal_id"] == first_id
+    assert rollback_target["skill_name"] == "synth-test-pipeline"
+    archived = Path(rollback_target["path"])
+    assert archived.is_dir()
+    assert "Sample synthetic pipeline" in (archived / "SKILL.md").read_text(
+        encoding="utf-8",
+    )
+    managed_gates = json.loads(
+        (
+            home
+            / "skills"
+            / "synth-test-pipeline"
+            / "gates.json"
+        ).read_text(encoding="utf-8"),
+    )
+    lifecycle = managed_gates["lifecycle"]
+    assert lifecycle["status"] == "active"
+    assert lifecycle["accepted_proposal_id"] == replacement_id
+    assert lifecycle["supersedes"]["proposal_id"] == first_id
+    assert lifecycle["rollback_target"]["proposal_id"] == first_id
+    assert lifecycle["owner"] == "unit-test"
+    assert (home / "proposals" / replacement_id).exists() is False
+
+
+def test_rollback_skill_restores_recorded_target_and_archives_current(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    first_id = _seed_proposal(home)
+    accepted = proposals_lib.accept_proposal(home, first_id)
+    assert accepted["status"] == "ok"
+    replacement_skill_md = SAMPLE_SKILL_MD.replace(
+        "Sample synthetic pipeline for proposals_lib tests",
+        "Replacement synthetic pipeline for proposals_lib tests",
+    )
+    replacement = proposals_lib.write_proposal(
+        home,
+        replacement_skill_md,
+        GATES_PASSING,
+        SMOKE_PASSING,
+    )
+    replacement_id = replacement["proposal_id"]
+    replaced = proposals_lib.accept_proposal(home, replacement_id, replace=True)
+    assert replaced["status"] == "ok"
+
+    out = proposals_lib.rollback_skill(home, "synth-test-pipeline")
+
+    assert out["status"] == "ok"
+    assert out["name"] == "synth-test-pipeline"
+    assert out["restored_proposal_id"] == first_id
+    managed = home / "skills" / "synth-test-pipeline"
+    assert "Sample synthetic pipeline" in (managed / "SKILL.md").read_text(
+        encoding="utf-8",
+    )
+    gates = json.loads((managed / "gates.json").read_text(encoding="utf-8"))
+    assert gates["lifecycle"]["status"] == "rolled_back_active"
+    assert gates["lifecycle"]["rolled_back_from"]["proposal_id"] == replacement_id
+    archived_current = Path(out["archived_current"]["path"])
+    assert archived_current.is_dir()
+    assert "Replacement synthetic pipeline" in (
+        archived_current / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_rollback_skill_refuses_without_target(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    pid = _seed_proposal(home)
+    accepted = proposals_lib.accept_proposal(home, pid)
+    assert accepted["status"] == "ok"
+
+    out = proposals_lib.rollback_skill(home, "synth-test-pipeline")
+
+    assert out["status"] == "refused"
+    assert "rollback target" in out["reason"]
+
+
 def test_reject_removes_directory(tmp_path: Path) -> None:
     home = tmp_path / ".opensquilla"
     pid = _seed_proposal(home)

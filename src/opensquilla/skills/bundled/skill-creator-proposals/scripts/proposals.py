@@ -27,6 +27,17 @@ from opensquilla.paths import default_opensquilla_home  # noqa: E402
 from opensquilla.skills import proposals_lib  # noqa: E402
 
 
+def _bool_arg(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    raise argparse.ArgumentTypeError("expected boolean")
+
+
 def cmd_write_proposal(args: argparse.Namespace) -> dict:
     skill_md = (
         args.skill_md_inline
@@ -64,12 +75,20 @@ def cmd_show(args: argparse.Namespace) -> dict:
 
 def cmd_accept(args: argparse.Namespace) -> dict:
     return proposals_lib.accept_proposal(
-        Path(args.home), args.proposal_id, bool(args.force),
+        Path(args.home),
+        args.proposal_id,
+        bool(args.force),
+        replace=bool(args.replace),
+        owner=args.owner or "",
     )
 
 
 def cmd_reject(args: argparse.Namespace) -> dict:
     return proposals_lib.reject_proposal(Path(args.home), args.proposal_id)
+
+
+def cmd_rollback(args: argparse.Namespace) -> dict:
+    return proposals_lib.rollback_skill(Path(args.home), args.skill_name)
 
 
 def _load_patch_request(args: argparse.Namespace) -> dict:
@@ -126,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         choices=[
             "write_proposal", "list", "show", "accept", "reject",
-            "pending_count", "patch", "benchmark",
+            "pending_count", "patch", "benchmark", "rollback",
         ],
     )
     p.add_argument(
@@ -149,7 +168,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--generation-quality-result", default=None)
     p.add_argument("--activation-result", default=None)
     p.add_argument("--proposal-id", default=None)
+    p.add_argument("--skill-name", default=None)
     p.add_argument("--force", action="store_true")
+    p.add_argument("--replace", nargs="?", const=True, default=False, type=_bool_arg)
     p.add_argument("--patch-json", default=None)
     p.add_argument("--patch-file", default=None)
     p.add_argument("--owner", default=None)
@@ -164,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
         "show": cmd_show,
         "accept": cmd_accept,
         "reject": cmd_reject,
+        "rollback": cmd_rollback,
         "pending_count": cmd_pending_count,
         "patch": cmd_patch,
         "benchmark": cmd_benchmark,
