@@ -21,11 +21,40 @@ import shutil
 import uuid
 from pathlib import Path
 
+import yaml
+
 PROPOSAL_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
 SKILL_NAME_PATTERN = re.compile(r"[\w\-]+")
 RISK_LEVELS = frozenset({"low", "medium", "high"})
 _NO_REQUIRED_IMPROVEMENTS = frozenset({"", "none", "no", "n/a", "not applicable"})
 _CREATOR_QUALITY_REQUIRED_MODES = frozenset({"FULL_GATED", "PERSISTED_PROPOSAL"})
+_PATCH_ALLOWED_OPERATIONS = frozenset({
+    "set_description",
+    "add_triggers",
+    "remove_triggers",
+    "merge_metadata_opensquilla",
+    "merge_output_contract",
+    "append_eval_prompts",
+    "append_body",
+    "owner",
+})
+_PATCH_APPLIED_OPERATION_ORDER = (
+    "set_description",
+    "add_triggers",
+    "remove_triggers",
+    "merge_metadata_opensquilla",
+    "merge_output_contract",
+    "append_eval_prompts",
+    "append_body",
+)
+_PATCH_STALE_GATES = (
+    "smoke",
+    "collision_check",
+    "risk_classify",
+    "generation_quality",
+    "activation_eval",
+    "runtime_e2e",
+)
 
 
 def proposals_dir(home: Path) -> Path:
@@ -539,6 +568,283 @@ def show_proposal(home: Path, proposal_id: str) -> dict:
     }
 
 
+def _split_skill_markdown(skill_md: str) -> tuple[dict, str]:
+    match = re.match(
+        r"\A---\s*\n(?P<frontmatter>.*?)\n---(?:\n(?P<body>.*)|\Z)",
+        skill_md,
+        re.DOTALL,
+    )
+    if not match:
+        raise ValueError("missing_skill_frontmatter")
+    raw_frontmatter = yaml.safe_load(match.group("frontmatter")) or {}
+    if not isinstance(raw_frontmatter, dict):
+        raise ValueError("skill_frontmatter_not_mapping")
+    return raw_frontmatter, match.group("body") or ""
+
+
+def _render_skill_markdown(frontmatter: dict, body: str) -> str:
+    rendered_frontmatter = yaml.safe_dump(
+        frontmatter,
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    if not rendered_frontmatter.endswith("\n"):
+        rendered_frontmatter += "\n"
+    return f"---\n{rendered_frontmatter}---\n{body}"
+
+
+def _string_list(value: object, operation: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"invalid_patch_operation:{operation}")
+    return list(value)
+
+
+def _dict_value(value: object, operation: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"invalid_patch_operation:{operation}")
+    return dict(value)
+
+
+def _list_of_dicts(value: object, operation: str) -> list[dict]:
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"invalid_patch_operation:{operation}")
+    return [dict(item) for item in value]
+
+
+def _apply_patch_request(
+    frontmatter: dict,
+    body: str,
+    patch_request: dict,
+) -> tuple[dict, str, list[str]]:
+    revised = dict(frontmatter)
+    revised_body = body
+    applied_operations: list[str] = []
+
+    if "set_description" in patch_request:
+        description = patch_request["set_description"]
+        if not isinstance(description, str):
+            raise ValueError("invalid_patch_operation:set_description")
+        revised["description"] = description
+        applied_operations.append("set_description")
+
+    if "add_triggers" in patch_request:
+        additions = _string_list(patch_request["add_triggers"], "add_triggers")
+        current = revised.get("triggers")
+        triggers = list(current) if isinstance(current, list) else []
+        for trigger in additions:
+            if trigger not in triggers:
+                triggers.append(trigger)
+        revised["triggers"] = triggers
+        applied_operations.append("add_triggers")
+
+    if "remove_triggers" in patch_request:
+        removals = set(_string_list(patch_request["remove_triggers"], "remove_triggers"))
+        current = revised.get("triggers")
+        triggers = list(current) if isinstance(current, list) else []
+        revised["triggers"] = [
+            trigger for trigger in triggers
+            if not isinstance(trigger, str) or trigger not in removals
+        ]
+        applied_operations.append("remove_triggers")
+
+    if "merge_metadata_opensquilla" in patch_request:
+        patch_metadata = _dict_value(
+            patch_request["merge_metadata_opensquilla"],
+            "merge_metadata_opensquilla",
+        )
+        metadata = revised.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        opensquilla_metadata = metadata.get("opensquilla")
+        if not isinstance(opensquilla_metadata, dict):
+            opensquilla_metadata = {}
+        metadata["opensquilla"] = {
+            **opensquilla_metadata,
+            **patch_metadata,
+        }
+        revised["metadata"] = metadata
+        applied_operations.append("merge_metadata_opensquilla")
+
+    if "merge_output_contract" in patch_request:
+        patch_output_contract = _dict_value(
+            patch_request["merge_output_contract"],
+            "merge_output_contract",
+        )
+        output_contract = revised.get("output_contract")
+        if not isinstance(output_contract, dict):
+            output_contract = {}
+        revised["output_contract"] = {
+            **output_contract,
+            **patch_output_contract,
+        }
+        applied_operations.append("merge_output_contract")
+
+    if "append_eval_prompts" in patch_request:
+        prompts = _list_of_dicts(
+            patch_request["append_eval_prompts"],
+            "append_eval_prompts",
+        )
+        current = revised.get("eval_prompts")
+        eval_prompts = list(current) if isinstance(current, list) else []
+        eval_prompts.extend(prompts)
+        revised["eval_prompts"] = eval_prompts
+        applied_operations.append("append_eval_prompts")
+
+    if "append_body" in patch_request:
+        append_body = patch_request["append_body"]
+        if not isinstance(append_body, str):
+            raise ValueError("invalid_patch_operation:append_body")
+        if revised_body and not revised_body.endswith("\n"):
+            revised_body += "\n"
+        revised_body += append_body
+        applied_operations.append("append_body")
+
+    return (
+        revised,
+        revised_body,
+        [
+            operation for operation in _PATCH_APPLIED_OPERATION_ORDER
+            if operation in applied_operations
+        ],
+    )
+
+
+def _gate_previous_passed(previous: object) -> bool | None:
+    if not isinstance(previous, dict):
+        return None
+    passed = previous.get("passed")
+    if isinstance(passed, bool):
+        return passed
+    child_passed_values = [
+        value.get("passed")
+        for value in previous.values()
+        if isinstance(value, dict) and isinstance(value.get("passed"), bool)
+    ]
+    if child_passed_values:
+        return all(child_passed_values)
+    return None
+
+
+def _stale_gate(name: str, previous: object, required: bool = True) -> dict:
+    if isinstance(previous, dict) and isinstance(previous.get("required"), bool):
+        required = previous["required"]
+    stale = {
+        "required": required,
+        "passed": False,
+        "reason": "stale_after_patch",
+        "stale": True,
+    }
+    previous_passed = _gate_previous_passed(previous)
+    if previous_passed is not None:
+        stale["previous_passed"] = previous_passed
+    if isinstance(previous, dict):
+        stale["previous"] = previous
+    if name == "smoke" and "previous_passed" not in stale:
+        stale["previous_passed"] = False
+    return stale
+
+
+def _next_revision(parent_gates: dict, parent_id: str, patch_request: dict) -> dict:
+    parent_revision = parent_gates.get("revision")
+    owner = patch_request.get("owner", "")
+    if not isinstance(owner, str):
+        raise ValueError("invalid_patch_operation:owner")
+    if isinstance(parent_revision, dict):
+        revision_number = int(parent_revision.get("revision") or 1) + 1
+        root_proposal_id = str(parent_revision.get("root_proposal_id") or parent_id)
+    else:
+        revision_number = 2
+        root_proposal_id = parent_id
+    return {
+        "parent_proposal_id": parent_id,
+        "root_proposal_id": root_proposal_id,
+        "revision": revision_number,
+        "owner": owner,
+    }
+
+
+def _lint_revised_skill(skill_md: str) -> dict:
+    try:
+        from opensquilla.skills.creator.proposer import meta_skill_lint_run
+
+        lint_raw = meta_skill_lint_run(skill_md)
+        lint_payload = json.loads(lint_raw)
+    except Exception as exc:  # noqa: BLE001 - gate payload must capture any lint failure.
+        return {
+            "passed": False,
+            "reason": "lint_failed",
+            "error": str(exc)[:500],
+        }
+    if not isinstance(lint_payload, dict):
+        return {
+            "passed": False,
+            "reason": "lint_output_not_mapping",
+            "raw": lint_payload,
+        }
+    return lint_payload
+
+
+def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
+    """Create a revised pending proposal from an allowlisted structured patch."""
+    if not is_valid_proposal_id(proposal_id):
+        return {"status": "error", "reason": "invalid proposal_id format"}
+    if not isinstance(patch_request, dict):
+        return {"status": "refused", "reason": "invalid_patch_request"}
+    unsupported = sorted(set(patch_request) - _PATCH_ALLOWED_OPERATIONS)
+    if unsupported:
+        return {
+            "status": "refused",
+            "reason": f"unsupported_patch_operations:{','.join(unsupported)}",
+        }
+
+    parent_dir = proposals_dir(home) / proposal_id
+    skill_path = parent_dir / "SKILL.md"
+    gates_path = parent_dir / "gates.json"
+    if not skill_path.is_file():
+        return {"status": "error", "reason": f"proposal {proposal_id} not found"}
+    parent_skill_md = skill_path.read_text(encoding="utf-8")
+    parent_gates: dict = {}
+    if gates_path.is_file():
+        try:
+            parent_gates = json.loads(gates_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            parent_gates = {}
+
+    try:
+        frontmatter, body = _split_skill_markdown(parent_skill_md)
+        revised_frontmatter, revised_body, applied_operations = _apply_patch_request(
+            frontmatter,
+            body,
+            patch_request,
+        )
+        revision = _next_revision(parent_gates, proposal_id, patch_request)
+    except (ValueError, yaml.YAMLError) as exc:
+        return {"status": "refused", "reason": str(exc)}
+
+    revised_skill_md = _render_skill_markdown(revised_frontmatter, revised_body)
+    revision["applied_operations"] = applied_operations
+    gates = {
+        "creator_mode": "PATCH_PROPOSAL",
+        "revision": revision,
+        "lint": _lint_revised_skill(revised_skill_md),
+        "auto_enable_eligible": False,
+    }
+    for gate_name in _PATCH_STALE_GATES:
+        gates[gate_name] = _stale_gate(
+            gate_name,
+            parent_gates.get(gate_name),
+            required=(gate_name == "smoke"),
+        )
+
+    child_id = atomic_write_proposal(home, revised_skill_md, gates)
+    return {
+        "status": "ok",
+        "proposal_id": child_id,
+        "parent_proposal_id": proposal_id,
+        "auto_enable_eligible": False,
+    }
+
+
 def accept_proposal(home: Path, proposal_id: str, force: bool = False) -> dict:
     """Promote a proposal to the MANAGED skills layer."""
     if not is_valid_proposal_id(proposal_id):
@@ -733,6 +1039,7 @@ __all__ = [
     "is_valid_proposal_id",
     "list_auto_enabled_skills",
     "list_proposals",
+    "patch_proposal",
     "pending_count",
     "proposals_dir",
     "read_auto_propose_settings",

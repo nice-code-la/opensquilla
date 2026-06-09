@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 from opensquilla.skills import proposals_lib
 
 SAMPLE_SKILL_MD = """---
@@ -638,6 +640,101 @@ def test_accept_refuses_when_gates_fail_without_force(tmp_path: Path) -> None:
     assert out["status"] == "refused"
     out2 = proposals_lib.accept_proposal(home, pid, force=True)
     assert out2["status"] == "ok"
+
+
+def test_patch_proposal_creates_revision_and_stales_gates(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    parent_id = _seed_proposal(home)
+    parent_skill_path = home / "proposals" / parent_id / "SKILL.md"
+    original_parent_skill_md = parent_skill_path.read_text(encoding="utf-8")
+    patch = {
+        "set_description": "Refined synthetic pipeline for proposal patch tests.",
+        "add_triggers": ["refined synth trigger"],
+        "remove_triggers": ["synth test trigger"],
+        "merge_output_contract": {"required_sections": ["Summary", "Evidence"]},
+        "append_eval_prompts": [{
+            "name": "refined-positive",
+            "prompt": "please use refined synth trigger",
+            "rubric": ["Summary"],
+        }],
+        "merge_metadata_opensquilla": {"requires_tools": ["read_file"]},
+        "append_body": (
+            "## Revision Notes\n\n"
+            "- Tightened trigger and output contract.\n"
+        ),
+        "owner": "unit-test",
+    }
+
+    result = proposals_lib.patch_proposal(home, parent_id, patch)
+
+    assert result["status"] == "ok"
+    child_id = result["proposal_id"]
+    assert child_id != parent_id
+    assert parent_skill_path.read_text(encoding="utf-8") == original_parent_skill_md
+
+    child = proposals_lib.show_proposal(home, child_id)
+    assert child["status"] == "ok"
+    frontmatter_text = child["skill_md"].split("---", 2)[1]
+    child_frontmatter = yaml.safe_load(frontmatter_text)
+    assert child_frontmatter["description"] == patch["set_description"]
+    assert child_frontmatter["triggers"] == ["refined synth trigger"]
+    assert child_frontmatter["output_contract"] == {
+        "required_sections": ["Summary", "Evidence"],
+    }
+    assert child_frontmatter["eval_prompts"] == patch["append_eval_prompts"]
+    assert child_frontmatter["metadata"]["opensquilla"] == {
+        "requires_tools": ["read_file"],
+    }
+    assert "## Revision Notes" in child["skill_md"]
+    assert "- Tightened trigger and output contract." in child["skill_md"]
+
+    child_gates = child["gates"]
+    assert child_gates["creator_mode"] == "PATCH_PROPOSAL"
+    assert child_gates["revision"] == {
+        "parent_proposal_id": parent_id,
+        "root_proposal_id": parent_id,
+        "revision": 2,
+        "owner": "unit-test",
+        "applied_operations": [
+            "set_description",
+            "add_triggers",
+            "remove_triggers",
+            "merge_metadata_opensquilla",
+            "merge_output_contract",
+            "append_eval_prompts",
+            "append_body",
+        ],
+    }
+    assert child_gates["auto_enable_eligible"] is False
+    for gate_name in (
+        "smoke",
+        "collision_check",
+        "risk_classify",
+        "generation_quality",
+        "activation_eval",
+        "runtime_e2e",
+    ):
+        gate = child_gates[gate_name]
+        assert gate["passed"] is False
+        assert gate["reason"] == "stale_after_patch"
+        assert gate["stale"] is True
+
+    accepted = proposals_lib.accept_proposal(home, child_id)
+    assert accepted["status"] == "refused"
+    assert "gates not all passed" in accepted["reason"]
+
+
+def test_patch_proposal_refuses_unsupported_operations(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    parent_id = _seed_proposal(home)
+
+    result = proposals_lib.patch_proposal(home, parent_id, {"set_name": "evil"})
+
+    assert result == {
+        "status": "refused",
+        "reason": "unsupported_patch_operations:set_name",
+    }
+    assert proposals_lib.pending_count(home) == {"count": 1}
 
 
 def test_accept_refuses_stale_required_creator_proposal_missing_new_gates(
