@@ -584,17 +584,54 @@ def _skills_managed_dir() -> Path:
     return _proposals_home() / "skills"
 
 
+def _load_proposal_patch_request(
+    patch_json: str | None,
+    patch_file: Path | None,
+    owner: str | None,
+) -> dict[str, Any]:
+    patch_request: dict[str, Any] = {}
+    try:
+        if patch_file is not None:
+            loaded = json.loads(patch_file.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("--patch-file must contain a JSON object")
+            patch_request.update(loaded)
+        if patch_json:
+            loaded = json.loads(patch_json)
+            if not isinstance(loaded, dict):
+                raise ValueError("--patch-json must be a JSON object")
+            patch_request.update(loaded)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        typer.echo(f"Error: invalid patch input: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if not patch_request:
+        typer.echo("Error: patch requires --patch-json or --patch-file", err=True)
+        raise typer.Exit(2)
+    if owner:
+        patch_request["owner"] = owner
+    return patch_request
+
+
 @meta_app.command("proposals")
 def proposals_cmd(
     action: str = typer.Argument(
-        ..., help="list | accept | show — proposal CRUD action",
+        ..., help="list | accept | show | patch — proposal CRUD action",
     ),
     proposal_id: str | None = typer.Argument(
         None,
-        help="8-hex proposal id (required for accept/show)",
+        help="8-hex proposal id (required for accept/show/patch)",
     ),
     force: bool = typer.Option(
         False, "--force", help="Accept even when gates did not all pass",
+    ),
+    patch_json: str | None = typer.Option(
+        None, "--patch-json", help="Inline proposal patch JSON object",
+    ),
+    patch_file: Path | None = typer.Option(
+        None, "--patch-file", help="Path to proposal patch JSON object",
+    ),
+    owner: str | None = typer.Option(
+        None, "--owner", help="Patch revision owner override",
     ),
     json_out: bool = typer.Option(False, "--json", help="JSON output"),
 ) -> None:
@@ -603,6 +640,7 @@ def proposals_cmd(
     ``proposals list``                  — enumerate all candidates
     ``proposals show <id>``             — print one candidate's SKILL.md + gates
     ``proposals accept <id> [--force]`` — promote to MANAGED-layer skill
+    ``proposals patch <id> --patch-json '{...}'`` — create a proposal revision
     """
     import json as _json
     import re
@@ -647,7 +685,7 @@ def proposals_cmd(
             )
         return
 
-    if action in ("show", "accept") and not proposal_id:
+    if action in ("show", "accept", "patch") and not proposal_id:
         typer.echo(f"Error: '{action}' requires a proposal_id argument", err=True)
         raise typer.Exit(2)
 
@@ -685,6 +723,29 @@ def proposals_cmd(
         typer.echo("\n-- SKILL.md --")
         typer.echo(skill_md)
         return
+
+    if action == "patch":
+        patch_request = _load_proposal_patch_request(patch_json, patch_file, owner)
+        result = proposals_lib.patch_proposal(
+            _proposals_home(),
+            proposal_id or "",
+            patch_request,
+        )
+        if json_out:
+            typer.echo(_json.dumps(result))
+            if result.get("status") != "ok":
+                raise typer.Exit(1)
+            return
+        if result.get("status") == "ok":
+            typer.echo(
+                f"Patched proposal {result.get('parent_proposal_id')} "
+                f"-> {result.get('proposal_id')}"
+            )
+            return
+        reason = str(result.get("reason") or "proposal patch failed")
+        status = str(result.get("status") or "error")
+        typer.echo(f"{status.title()}: {reason}", err=True)
+        raise typer.Exit(1)
 
     # action == "accept"
     result = proposals_lib.accept_proposal(_proposals_home(), proposal_id or "", force=force)

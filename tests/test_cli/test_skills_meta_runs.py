@@ -6,11 +6,13 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from opensquilla.cli.main import app as cli_app
 from opensquilla.persistence.meta_run_writer import open_meta_run_writer
 from opensquilla.persistence.migrator import apply_pending
+from opensquilla.skills import proposals_lib
 from opensquilla.skills.meta.types import MetaPlan, MetaResult, MetaStep
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1].parent / "migrations"
@@ -249,3 +251,67 @@ composition:
     assert "missing_generation_quality_result" in result.output
     assert (proposal_dir / "SKILL.md").is_file()
     assert not (tmp_path / "skills" / "stale-required-gates").exists()
+
+
+def test_proposals_patch_cli_creates_revision(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(tmp_path))
+    parent_skill_md = """---
+name: cli-patch-parent
+description: "Original CLI proposal"
+kind: meta
+triggers:
+  - "cli patch parent"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+"""
+    parent = proposals_lib.write_proposal(
+        tmp_path,
+        parent_skill_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    proposal_id = parent["proposal_id"]
+
+    result = runner.invoke(
+        cli_app,
+        [
+            "skills",
+            "meta",
+            "proposals",
+            "patch",
+            proposal_id,
+            "--patch-json",
+            json.dumps({"set_description": "Patched from CLI"}),
+            "--owner",
+            "cli-test",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["status"] == "ok"
+    assert data["parent_proposal_id"] == proposal_id
+    child_id = data["proposal_id"]
+    assert child_id != proposal_id
+
+    child_skill_md = (tmp_path / "proposals" / child_id / "SKILL.md").read_text(
+        encoding="utf-8",
+    )
+    child_frontmatter = yaml.safe_load(child_skill_md.split("---", 2)[1])
+    assert child_frontmatter["description"] == "Patched from CLI"
+    child_gates = json.loads((tmp_path / "proposals" / child_id / "gates.json").read_text())
+    assert child_gates["revision"]["parent_proposal_id"] == proposal_id
+    assert child_gates["revision"]["owner"] == "cli-test"
+    assert (
+        tmp_path / "proposals" / proposal_id / "SKILL.md"
+    ).read_text(encoding="utf-8") == parent_skill_md

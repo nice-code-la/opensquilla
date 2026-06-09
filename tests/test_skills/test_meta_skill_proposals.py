@@ -127,3 +127,32 @@ def test_proposals_cli_works_without_explicit_home(monkeypatch, tmp_path: Path) 
     assert proc.returncode == 0, f"argparse should accept missing --home: {proc.stderr}"
     out = json.loads(proc.stdout)
     assert "proposals" in out  # empty list ok; just shouldn't crash
+
+
+def test_patch_action_creates_revision(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    parent = _run(
+        "write_proposal", home=home,
+        skill_md_inline=SAMPLE_SKILL_MD,
+        lint_result=json.dumps({"G1": {"passed": True}, "G2": {"passed": True}}),
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+    )
+    parent_id = parent["proposal_id"]
+
+    out = _run(
+        "patch",
+        home=home,
+        proposal_id=parent_id,
+        patch_json=json.dumps({
+            "add_triggers": ["patched trigger"],
+            "owner": "script-test",
+        }),
+    )
+
+    assert out["status"] == "ok"
+    child_id = out["proposal_id"]
+    assert child_id != parent_id
+    assert out["parent_proposal_id"] == parent_id
+    gates = json.loads((home / "proposals" / child_id / "gates.json").read_text())
+    assert gates["revision"]["parent_proposal_id"] == parent_id
+    assert gates["revision"]["owner"] == "script-test"

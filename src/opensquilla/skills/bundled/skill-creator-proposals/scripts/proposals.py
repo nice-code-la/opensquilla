@@ -72,6 +72,34 @@ def cmd_reject(args: argparse.Namespace) -> dict:
     return proposals_lib.reject_proposal(Path(args.home), args.proposal_id)
 
 
+def _load_patch_request(args: argparse.Namespace) -> dict:
+    patch_request: dict = {}
+    if args.patch_file:
+        loaded = json.loads(Path(args.patch_file).read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
+            raise ValueError("--patch-file must contain a JSON object")
+        patch_request.update(loaded)
+    if args.patch_json:
+        loaded = json.loads(args.patch_json)
+        if not isinstance(loaded, dict):
+            raise ValueError("--patch-json must be a JSON object")
+        patch_request.update(loaded)
+    if not patch_request:
+        raise ValueError("patch action requires --patch-json or --patch-file")
+    if args.owner:
+        patch_request["owner"] = args.owner
+    return patch_request
+
+
+def cmd_patch(args: argparse.Namespace) -> dict:
+    patch_request = _load_patch_request(args)
+    return proposals_lib.patch_proposal(
+        Path(args.home),
+        args.proposal_id,
+        patch_request,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -79,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         choices=[
             "write_proposal", "list", "show", "accept", "reject",
-            "pending_count",
+            "pending_count", "patch",
         ],
     )
     p.add_argument(
@@ -103,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--activation-result", default=None)
     p.add_argument("--proposal-id", default=None)
     p.add_argument("--force", action="store_true")
+    p.add_argument("--patch-json", default=None)
+    p.add_argument("--patch-file", default=None)
+    p.add_argument("--owner", default=None)
     args = p.parse_args(argv)
 
     dispatch = {
@@ -112,8 +143,12 @@ def main(argv: list[str] | None = None) -> int:
         "accept": cmd_accept,
         "reject": cmd_reject,
         "pending_count": cmd_pending_count,
+        "patch": cmd_patch,
     }
-    result = dispatch[args.action](args)
+    try:
+        result = dispatch[args.action](args)
+    except (json.JSONDecodeError, OSError, ValueError) as exc:
+        p.error(str(exc))
     json.dump(result, sys.stdout, ensure_ascii=False)
     return 0
 
