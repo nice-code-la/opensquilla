@@ -294,6 +294,54 @@ def test_creator_dag_forwards_optional_draft_seed_to_fill_slots() -> None:
     assert "activation_result" in steps["persist"].tool_args
 
 
+def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
+    loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
+    loader.invalidate_cache()
+    creator_spec = loader.get_by_name("meta-skill-creator")
+    assert creator_spec is not None
+    plan = parse_meta_plan(creator_spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    assert "PATCH_PROPOSAL" in steps["creator_mode"].output_choices
+    assert steps["build_patch_request"].kind == "llm_chat"
+    assert steps["build_patch_request"].depends_on == ("creator_mode",)
+    assert "outputs.creator_mode == 'PATCH_PROPOSAL'" in steps["build_patch_request"].when
+    assert "Allowed keys:" in str(steps["build_patch_request"].with_args["task"])
+
+    patch = steps["patch_proposal"]
+    assert patch.kind == "tool_call"
+    assert patch.tool == "meta_skill_patch_proposal"
+    assert patch.depends_on == ("build_patch_request",)
+    proposal_id_template = (
+        "{{ inputs.target_proposal_id | default(inputs.proposal_id | default('')) }}"
+    )
+    assert patch.tool_args == {
+        "proposal_id": proposal_id_template,
+        "patch_json": "{{ outputs.build_patch_request }}",
+        "home": "{{ inputs.home | default('') }}",
+    }
+
+    for step_id in (
+        "harvest",
+        "pick_pattern",
+        "fill_slots",
+        "assemble",
+        "generation_quality",
+        "activation_eval",
+        "collision_check",
+        "lint",
+        "risk_classify",
+        "smoke",
+        "preview",
+        "persist",
+    ):
+        assert "outputs.creator_mode != 'PATCH_PROPOSAL'" in steps[step_id].when
+
+    assert "patch_proposal" in steps["final_response"].depends_on
+    assert "outputs.patch_proposal" in str(steps["final_response"].tool_args["text"])
+
+
 def test_manual_creator_persist_auto_enables_when_setting_is_on(tmp_path) -> None:
     """The manual meta-skill-creator persist tool should use the same
     conservative auto-enable path as cron/dream auto-propose when the

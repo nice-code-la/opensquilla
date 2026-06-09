@@ -573,6 +573,7 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
         "PREVIEW_ONLY",
         "PERSISTED_PROPOSAL",
         "FULL_GATED",
+        "PATCH_PROPOSAL",
     }
     assert set(steps["pick_pattern"].output_choices) == {
         "p1_sequential",
@@ -595,6 +596,8 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     assert steps["harvest"].skill == "history-explorer"
     creation_steps = {
         "creator_mode",
+        "build_patch_request",
+        "patch_proposal",
         "harvest",
         "pick_pattern",
         "fill_slots",
@@ -612,9 +615,15 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     for step_id in creation_steps:
         assert "route: meta-skill" in steps[step_id].when
     assert "Unattended meta-skill auto-propose run" in steps["harvest"].when
+    assert "outputs.creator_mode == 'PATCH_PROPOSAL'" in steps["build_patch_request"].when
+    assert steps["patch_proposal"].tool == "meta_skill_patch_proposal"
     assert "outputs.creator_mode != 'PREVIEW_ONLY'" in steps["smoke"].when
     assert "outputs.creator_mode != 'PREVIEW_ONLY'" in steps["persist"].when
-    assert steps["final_response"].depends_on == ("preview", "normal_skill_exit")
+    assert steps["final_response"].depends_on == (
+        "preview",
+        "normal_skill_exit",
+        "patch_proposal",
+    )
     assert steps["final_response"].tool == "emit_text"
 
 

@@ -25,6 +25,14 @@ request_template:
       default: "preview unless the user asks to persist"
       default_zh: "默认预览；仅在用户要求持久化时保存"
       default_en: "preview unless the user asks to persist"
+    - name: target_proposal_id
+      label_zh: "要修订的 proposal ID"
+      label_en: "Proposal ID to revise"
+      required: false
+    - name: patch_request
+      label_zh: "修订要求"
+      label_en: "Patch request"
+      required: false
     - name: constraints
       label_zh: "限制条件"
       label_en: "Constraints"
@@ -130,6 +138,9 @@ composition:
           If draft seed JSON is present and coherent, classify as ROUTE:
           meta-skill unless the seed explicitly refuses drafting. Preserve its
           goal, observed steps, constraints, and negative cases.
+          If the user asks to edit, revise, patch, update, or improve an
+          existing pending meta-skill proposal, classify as ROUTE: meta-skill
+          and preserve the target proposal id and requested edits.
 
           Return:
           ROUTE: <normal-skill|meta-skill>
@@ -208,6 +219,7 @@ composition:
         - PREVIEW_ONLY
         - PERSISTED_PROPOSAL
         - FULL_GATED
+        - PATCH_PROPOSAL
       with:
         text: |
           Classify how far the creator workflow should go.
@@ -225,6 +237,10 @@ composition:
           {{ inputs.get('collected', {}).get('creator_clarify', {}) | tojson }}
 
           Decision rules:
+          - PATCH_PROPOSAL: user asks to edit, revise, patch, update, or
+            improve an existing pending proposal, or a draft seed's duplicate
+            detection recommends patching an existing proposal instead of
+            creating a new one.
           - PREVIEW_ONLY: user asks for an example, template, plan, draft,
             or wants to inspect before writing/persisting anything.
           - PERSISTED_PROPOSAL: user asks to create/save/write/propose a
@@ -235,13 +251,66 @@ composition:
             requires preserving all creator gates before any auto-enable
             decision.
 
+    - id: build_patch_request
+      label: "构造修订请求"
+      label_en: "Build patch request"
+      kind: llm_chat
+      depends_on: [creator_mode]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'PATCH_PROPOSAL'"
+      with:
+        system: |
+          You convert a natural-language proposal edit request into a compact
+          JSON object for meta_skill_patch_proposal. Do not call tools, inspect
+          files, or invent proposal contents. Use only the allowed operation
+          keys.
+        task: |
+          Return only a JSON object, no markdown.
+
+          Allowed keys:
+          - set_description: string
+          - add_triggers: array of strings
+          - remove_triggers: array of strings
+          - merge_metadata_opensquilla: object
+          - merge_output_contract: object
+          - append_eval_prompts: array
+          - append_body: string
+          - owner: string
+
+          If the operator supplied explicit patch JSON below and it is already
+          a JSON object, return that object unchanged except for adding owner
+          when supplied.
+
+          User request:
+          {{ inputs.user_message | xml_escape | truncate(1200) }}
+
+          Clarified intent:
+          {{ outputs.clarify_intent | truncate(1000) }}
+
+          Optional patch request:
+          {{ inputs.patch_request | default(inputs.patch_json | default("")) | xml_escape | truncate(2000) }}
+
+          Optional owner:
+          {{ inputs.owner | default("") | xml_escape | truncate(200) }}
+
+    - id: patch_proposal
+      label: "修订提案"
+      label_en: "Patch proposal"
+      kind: tool_call
+      depends_on: [build_patch_request]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'PATCH_PROPOSAL'"
+      tool: meta_skill_patch_proposal
+      tool_args:
+        proposal_id: "{{ inputs.target_proposal_id | default(inputs.proposal_id | default('')) }}"
+        patch_json: "{{ outputs.build_patch_request }}"
+        home: "{{ inputs.home | default('') }}"
+
     - id: harvest
       label: "需求采集"
       label_en: "Requirement capture"
       kind: skill_exec
       skill: history-explorer
-      depends_on: [clarify_intent, creator_clarify]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and 'Unattended meta-skill auto-propose run' in inputs.get('system_prompt', '')"
+      depends_on: [clarify_intent, creator_clarify, creator_mode]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and 'Unattended meta-skill auto-propose run' in inputs.get('system_prompt', '')"
       on_failure: harvest_empty
       with:
         query: |
@@ -264,7 +333,7 @@ composition:
       label_en: "Mode selection"
       kind: llm_classify
       depends_on: [creator_mode, harvest]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       output_choices: [p1_sequential, p2_fan_out_merge, p3_condition_gated]
       with:
         history_summary: "{{ outputs.harvest | truncate(2000) }}"
@@ -283,7 +352,7 @@ composition:
       label_en: "Fill slots"
       kind: tool_call
       depends_on: [pick_pattern]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       tool: meta_skill_fill_slots
       tool_args:
         pattern_id: "{{ outputs.pick_pattern }}"
@@ -301,7 +370,7 @@ composition:
       label_en: "Assembly"
       kind: tool_call
       depends_on: [fill_slots]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       tool: meta_skill_assemble
       tool_args:
         pattern_id: "{{ outputs.pick_pattern }}"
@@ -312,7 +381,7 @@ composition:
       label_en: "Generation quality"
       kind: tool_call
       depends_on: [fill_slots]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       tool: meta_skill_generation_quality_run
       tool_args:
         pattern_id: "{{ outputs.pick_pattern }}"
@@ -323,7 +392,7 @@ composition:
       label_en: "Activation evaluation"
       kind: tool_call
       depends_on: [assemble]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       tool: meta_skill_activation_eval_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -335,7 +404,7 @@ composition:
       label_en: "Conflict check"
       kind: llm_chat
       depends_on: [assemble]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       with:
         system: |
           You are a trigger-collision reviewer for meta-skill-creator. Use only
@@ -355,7 +424,7 @@ composition:
       label_en: "Lint check"
       kind: tool_call
       depends_on: [collision_check]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       tool: meta_skill_lint_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -366,7 +435,7 @@ composition:
       label_en: "Risk classification"
       kind: llm_chat
       depends_on: [lint]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       with:
         system: |
           You are an operational-risk classifier for generated meta-skills. Use
@@ -496,7 +565,7 @@ composition:
       label_en: "Smoke test"
       kind: tool_call
       depends_on: [risk_classify]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY'"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY' and outputs.creator_mode != 'PATCH_PROPOSAL'"
       tool: meta_skill_smoke_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -523,7 +592,7 @@ composition:
       label_en: "Preview"
       kind: llm_chat
       depends_on: [smoke, acceptance_compare, runtime_e2e, generation_quality, activation_eval]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL'"
       with:
         system: |
           You are the final preview writer for meta-skill-creator. Produce only
@@ -572,7 +641,7 @@ composition:
       label_en: "Save"
       kind: tool_call
       depends_on: [preview, assemble, generation_quality, activation_eval]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY'"
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY' and outputs.creator_mode != 'PATCH_PROPOSAL'"
       tool: meta_skill_persist_proposal
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -590,12 +659,14 @@ composition:
       label: "最终回复"
       label_en: "Final response"
       kind: tool_call
-      depends_on: [preview, normal_skill_exit]
+      depends_on: [preview, normal_skill_exit, patch_proposal]
       tool: emit_text
       tool_args:
         text: |
           {% if outputs.normal_skill_exit %}
           {{ outputs.normal_skill_exit }}
+          {% elif outputs.patch_proposal %}
+          {{ outputs.patch_proposal }}
           {% else %}
           {{ outputs.preview }}
           {% endif %}

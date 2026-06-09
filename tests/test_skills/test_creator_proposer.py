@@ -100,7 +100,7 @@ def test_meta_skill_fill_slots_with_stub_llm(monkeypatch) -> None:
 
 
 def test_creator_package_import_registers_tools() -> None:
-    """C1 regression: importing the creator package must register both tools
+    """C1 regression: importing the creator package must register creator tools
     in the default ToolRegistry. Phase 1 cross-task review found that the
     @tool decorators only run when the module is imported — production code
     must import opensquilla.skills.creator somewhere in the meta-skill branch."""
@@ -116,6 +116,7 @@ def test_creator_package_import_registers_tools() -> None:
         f"meta_skill_assemble not registered; got: {meta_names}"
     )
     assert "meta_skill_fill_slots" in names, "meta_skill_fill_slots not registered"
+    assert "meta_skill_patch_proposal" in names, "meta_skill_patch_proposal not registered"
 
 
 def test_meta_skill_fill_slots_retries_once_on_validation_error(monkeypatch) -> None:
@@ -170,7 +171,11 @@ def test_creator_tools_hidden_from_owner_default() -> None:
     ctx = ToolContext(is_owner=True)
     visible_names = {rt.spec.name for rt in reg._iter_visible_tools(ctx)}
 
-    for tool_name in ("meta_skill_assemble", "meta_skill_fill_slots"):
+    for tool_name in (
+        "meta_skill_assemble",
+        "meta_skill_fill_slots",
+        "meta_skill_patch_proposal",
+    ):
         assert tool_name not in visible_names, (
             f"{tool_name} is visible in the default owner tool catalog; "
             "N1 fix requires exposed_by_default=False so C1 lazy import "
@@ -181,6 +186,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
     registered_names = set(reg.list_names())
     assert "meta_skill_assemble" in registered_names
     assert "meta_skill_fill_slots" in registered_names
+    assert "meta_skill_patch_proposal" in registered_names
 
 
 def test_resolve_provider_config_honors_env_overrides(monkeypatch, tmp_path) -> None:
@@ -331,6 +337,9 @@ def test_creator_tools_registered_via_meta_invoke_module_import() -> None:
     )
     assert "meta_skill_assemble" in names, (
         "N10: meta_skill_assemble not registered via soft-path import"
+    )
+    assert "meta_skill_patch_proposal" in names, (
+        "N10: meta_skill_patch_proposal not registered via soft-path import"
     )
 
 
@@ -883,6 +892,56 @@ def test_persist_proposal_forwards_generation_quality_and_activation_results(mon
     assert isinstance(args, list)
     assert args[args.index("--generation-quality-result") + 1] == '{"passed": true}'
     assert args[args.index("--activation-result") + 1] == '{"passed": true}'
+
+
+def test_patch_proposal_tool_wrapper_creates_child_revision(tmp_path) -> None:
+    from opensquilla.skills import proposals_lib
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / ".opensquilla"
+    skill_md = """---
+name: synth-wrapper-patch
+description: "Wrapper patch test meta-skill."
+kind: meta
+meta_priority: 50
+triggers:
+  - "wrapper patch"
+composition:
+  steps:
+    - id: digest
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+    parent = proposals_lib.write_proposal(
+        home,
+        skill_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+        creator_mode="PERSISTED_PROPOSAL",
+        generation_quality_result={"passed": True},
+        activation_result={"passed": True},
+    )
+    patch_json = json.dumps({
+        "add_triggers": ["wrapper patch revised"],
+        "owner": "test-operator",
+    })
+
+    out = json.loads(proposer.meta_skill_patch_proposal(
+        parent["proposal_id"],
+        patch_json,
+        home=str(home),
+    ))
+
+    assert out["status"] == "ok"
+    assert out["parent_proposal_id"] == parent["proposal_id"]
+    assert out["proposal_id"] != parent["proposal_id"]
+    child_dir = home / "proposals" / out["proposal_id"]
+    assert "wrapper patch revised" in (child_dir / "SKILL.md").read_text(encoding="utf-8")
+    gates = json.loads((child_dir / "gates.json").read_text(encoding="utf-8"))
+    assert gates["creator_mode"] == "PATCH_PROPOSAL"
+    assert gates["revision"]["owner"] == "test-operator"
 
 
 def test_fill_slots_prompt_includes_draft_seed(monkeypatch) -> None:

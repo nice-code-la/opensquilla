@@ -1024,6 +1024,43 @@ def meta_skill_persist_proposal(
     return json.dumps(out, ensure_ascii=False)
 
 
+def meta_skill_patch_proposal(
+    proposal_id: str,
+    patch_json: str,
+    home: str = "",
+) -> str:
+    """Create a reviewed revision of an existing pending proposal.
+
+    The patch surface intentionally accepts structured JSON only; the creator
+    DAG is responsible for turning natural-language edit requests into the
+    allowlisted operation shape consumed by proposals_lib.patch_proposal().
+    """
+    from opensquilla.skills.proposals_lib import patch_proposal
+
+    home_path = Path(home).expanduser() if home else Path.home() / ".opensquilla"
+    try:
+        patch_request = json.loads(_strip_code_fences(patch_json or "{}"))
+    except json.JSONDecodeError as exc:
+        return json.dumps(
+            {
+                "status": "refused",
+                "reason": "invalid_patch_json",
+                "detail": str(exc),
+            },
+            ensure_ascii=False,
+        )
+    if not isinstance(patch_request, dict):
+        return json.dumps(
+            {
+                "status": "refused",
+                "reason": "invalid_patch_request",
+            },
+            ensure_ascii=False,
+        )
+    result = patch_proposal(home_path, proposal_id, patch_request)
+    return json.dumps(result, ensure_ascii=False)
+
+
 def _maybe_auto_enable_manual_proposal(
     home: Path,
     proposal_id: str,
@@ -1291,6 +1328,35 @@ async def meta_skill_persist_proposal_tool(
         generation_quality_result=generation_quality_result,
         activation_result=activation_result,
         auto_enable_manual=auto_enable_manual,
+    )
+
+
+@tool(
+    name="meta_skill_patch_proposal",
+    description=(
+        "Create a revised pending proposal from an allowlisted structured "
+        "patch JSON object. Returns JSON with parent/child proposal IDs."
+    ),
+    params={
+        "proposal_id": {"type": "string"},
+        "patch_json": {"type": "string"},
+        "home": {"type": "string"},
+    },
+    required=["proposal_id", "patch_json"],
+    exposed_by_default=False,
+)
+async def meta_skill_patch_proposal_tool(
+    proposal_id: str,
+    patch_json: str,
+    home: str = "",
+) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(
+        meta_skill_patch_proposal,
+        proposal_id,
+        patch_json,
+        home,
     )
 
 
