@@ -737,6 +737,47 @@ def test_patch_proposal_refuses_unsupported_operations(tmp_path: Path) -> None:
     assert proposals_lib.pending_count(home) == {"count": 1}
 
 
+def test_accept_refuses_patch_revision_with_stale_gates_even_if_marked_eligible(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    parent_id = _seed_proposal(home)
+    patched = proposals_lib.patch_proposal(
+        home,
+        parent_id,
+        {"add_triggers": ["patched trigger"], "owner": "unit-test"},
+    )
+    child_id = patched["proposal_id"]
+    gates_path = home / "proposals" / child_id / "gates.json"
+    gates = json.loads(gates_path.read_text())
+    gates["auto_enable_eligible"] = True
+    gates_path.write_text(json.dumps(gates))
+
+    accepted = proposals_lib.accept_proposal(home, child_id)
+
+    assert accepted["status"] == "refused"
+    assert accepted["gates"]["smoke"]["stale"] is True
+    assert accepted["gates"]["acceptance_compare"]["stale"] is True
+
+
+def test_patch_proposal_refuses_malformed_parent_revision(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    parent_id = _seed_proposal(home)
+    gates_path = home / "proposals" / parent_id / "gates.json"
+    gates = json.loads(gates_path.read_text())
+    gates["revision"] = {"revision": [1], "root_proposal_id": parent_id}
+    gates_path.write_text(json.dumps(gates))
+
+    result = proposals_lib.patch_proposal(
+        home,
+        parent_id,
+        {"add_triggers": ["patched trigger"]},
+    )
+
+    assert result == {"status": "refused", "reason": "invalid_parent_revision"}
+    assert proposals_lib.pending_count(home) == {"count": 1}
+
+
 def test_accept_refuses_stale_required_creator_proposal_missing_new_gates(
     tmp_path: Path,
 ) -> None:

@@ -16,10 +16,15 @@ Path layout::
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
+import subprocess
+import sys
 import uuid
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -27,7 +32,18 @@ PROPOSAL_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
 SKILL_NAME_PATTERN = re.compile(r"[\w\-]+")
 RISK_LEVELS = frozenset({"low", "medium", "high"})
 _NO_REQUIRED_IMPROVEMENTS = frozenset({"", "none", "no", "n/a", "not applicable"})
-_CREATOR_QUALITY_REQUIRED_MODES = frozenset({"FULL_GATED", "PERSISTED_PROPOSAL"})
+_CREATOR_QUALITY_REQUIRED_MODES = frozenset({
+    "FULL_GATED",
+    "PERSISTED_PROPOSAL",
+    "PATCH_PROPOSAL",
+})
+_LINT_SCRIPT = (
+    Path(__file__).resolve().parent
+    / "bundled"
+    / "skill-creator-linter"
+    / "scripts"
+    / "lint.py"
+)
 _PATCH_ALLOWED_OPERATIONS = frozenset({
     "set_description",
     "add_triggers",
@@ -51,6 +67,7 @@ _PATCH_STALE_GATES = (
     "smoke",
     "collision_check",
     "risk_classify",
+    "acceptance_compare",
     "generation_quality",
     "activation_eval",
     "runtime_e2e",
@@ -310,6 +327,8 @@ def _creator_quality_gates_required_from_gates(gates: dict) -> bool:
 
 
 def _enforce_required_creator_quality_gates(gates: dict) -> bool:
+    if _contains_stale_gate(gates):
+        return False
     if not _creator_quality_gates_required_from_gates(gates):
         return gates.get("auto_enable_eligible") is True
     generation_quality_gate = gates.get("generation_quality")
@@ -347,6 +366,13 @@ def _enforce_required_creator_quality_gates(gates: dict) -> bool:
         and generation_quality_gate.get("passed") is True
         and activation_gate.get("passed") is True
     )
+
+
+def _contains_stale_gate(gates: dict) -> bool:
+    for value in gates.values():
+        if isinstance(value, dict) and value.get("stale") is True:
+            return True
+    return False
 
 
 def _evaluate_runtime_e2e(
@@ -593,6 +619,25 @@ def _render_skill_markdown(frontmatter: dict, body: str) -> str:
     return f"---\n{rendered_frontmatter}---\n{body}"
 
 
+def _json_safe_value(value: object, operation: str) -> Any:
+    if value is None or isinstance(value, str | int | bool):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"invalid_patch_operation:{operation}")
+        return value
+    if isinstance(value, list):
+        return [_json_safe_value(item, operation) for item in value]
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError(f"invalid_patch_operation:{operation}")
+        return {
+            key: _json_safe_value(item, operation)
+            for key, item in value.items()
+        }
+    raise ValueError(f"invalid_patch_operation:{operation}")
+
+
 def _string_list(value: object, operation: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"invalid_patch_operation:{operation}")
@@ -602,13 +647,13 @@ def _string_list(value: object, operation: str) -> list[str]:
 def _dict_value(value: object, operation: str) -> dict:
     if not isinstance(value, dict):
         raise ValueError(f"invalid_patch_operation:{operation}")
-    return dict(value)
+    return dict(_json_safe_value(value, operation))
 
 
 def _list_of_dicts(value: object, operation: str) -> list[dict]:
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
         raise ValueError(f"invalid_patch_operation:{operation}")
-    return [dict(item) for item in value]
+    return [dict(_json_safe_value(item, operation)) for item in value]
 
 
 def _apply_patch_request(
@@ -616,7 +661,7 @@ def _apply_patch_request(
     body: str,
     patch_request: dict,
 ) -> tuple[dict, str, list[str]]:
-    revised = dict(frontmatter)
+    revised = deepcopy(frontmatter)
     revised_body = body
     applied_operations: list[str] = []
 
@@ -750,7 +795,7 @@ def _next_revision(parent_gates: dict, parent_id: str, patch_request: dict) -> d
     if not isinstance(owner, str):
         raise ValueError("invalid_patch_operation:owner")
     if isinstance(parent_revision, dict):
-        revision_number = int(parent_revision.get("revision") or 1) + 1
+        revision_number = _parent_revision_number(parent_revision.get("revision")) + 1
         root_proposal_id = str(parent_revision.get("root_proposal_id") or parent_id)
     else:
         revision_number = 2
@@ -763,11 +808,31 @@ def _next_revision(parent_gates: dict, parent_id: str, patch_request: dict) -> d
     }
 
 
+def _parent_revision_number(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("invalid_parent_revision")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    raise ValueError("invalid_parent_revision")
+
+
 def _lint_revised_skill(skill_md: str) -> dict:
     try:
-        from opensquilla.skills.creator.proposer import meta_skill_lint_run
-
-        lint_raw = meta_skill_lint_run(skill_md)
+        proc = subprocess.run(
+            [sys.executable, str(_LINT_SCRIPT), "--skill-md-stdin", "--gates", "G1,G2"],
+            input=skill_md,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        lint_raw = proc.stdout or json.dumps({
+            "passed": False,
+            "reason": "linter_subprocess_failed",
+            "stderr": proc.stderr[:500],
+            "returncode": proc.returncode,
+        })
         lint_payload = json.loads(lint_raw)
     except Exception as exc:  # noqa: BLE001 - gate payload must capture any lint failure.
         return {
@@ -821,7 +886,10 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
     except (ValueError, yaml.YAMLError) as exc:
         return {"status": "refused", "reason": str(exc)}
 
-    revised_skill_md = _render_skill_markdown(revised_frontmatter, revised_body)
+    try:
+        revised_skill_md = _render_skill_markdown(revised_frontmatter, revised_body)
+    except (TypeError, yaml.YAMLError) as exc:
+        return {"status": "refused", "reason": f"invalid_patch_render:{str(exc)[:120]}"}
     revision["applied_operations"] = applied_operations
     gates = {
         "creator_mode": "PATCH_PROPOSAL",
