@@ -6,10 +6,12 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 # creator_fixtures is on sys.path via tests/test_skills/conftest.py
 from creator_fixtures import INTENT_PDF_DIGEST, INTENT_TRIP_PLANNER, synth_decision_log
 
+from opensquilla.engine.steps.meta_resolution import meta_resolution
 from opensquilla.engine.types import TextDeltaEvent
 from opensquilla.skills.loader import SkillLoader
 from opensquilla.skills.meta.orchestrator import MetaOrchestrator
@@ -345,6 +347,21 @@ def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
 
     assert "patch_proposal" in steps["final_response"].depends_on
     assert "outputs.patch_proposal" in str(steps["final_response"].tool_args["text"])
+
+
+async def test_meta_resolution_routes_pending_proposal_revision_request(tmp_path) -> None:
+    loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
+    loader.invalidate_cache()
+    ctx = SimpleNamespace(
+        message="please revise proposal deadbeef to add a safer trigger",
+        semantic_message="please revise proposal deadbeef to add a safer trigger",
+        system_prompt=("base system prompt", ""),
+        metadata={"skill_loader": loader},
+    )
+
+    out = await meta_resolution(ctx)  # type: ignore[arg-type]
+
+    assert out.metadata["meta_match"].plan.name == "meta-skill-creator"
 
 
 async def test_orchestrator_patches_proposal_id_from_user_message(tmp_path, monkeypatch) -> None:

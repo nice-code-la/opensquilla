@@ -315,3 +315,19 @@ composition:
     assert (
         tmp_path / "proposals" / proposal_id / "SKILL.md"
     ).read_text(encoding="utf-8") == parent_skill_md
+
+    forced_accept = runner.invoke(
+        cli_app,
+        [
+            "skills",
+            "meta",
+            "proposals",
+            "accept",
+            child_id,
+            "--force",
+        ],
+    )
+
+    assert forced_accept.exit_code == 1
+    assert "stale patch revision gates" in forced_accept.output
+    assert (tmp_path / "proposals" / child_id / "SKILL.md").is_file()

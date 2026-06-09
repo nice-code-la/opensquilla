@@ -156,3 +156,13 @@ def test_patch_action_creates_revision(tmp_path: Path) -> None:
     gates = json.loads((home / "proposals" / child_id / "gates.json").read_text())
     assert gates["revision"]["parent_proposal_id"] == parent_id
     assert gates["revision"]["owner"] == "script-test"
+
+    forced_accept = _run(
+        "accept",
+        "--force",
+        home=home,
+        proposal_id=child_id,
+    )
+    assert forced_accept["status"] == "refused"
+    assert "stale patch revision gates" in forced_accept["reason"]
+    assert (home / "proposals" / child_id / "SKILL.md").is_file()

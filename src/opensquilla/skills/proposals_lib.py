@@ -931,6 +931,12 @@ def accept_proposal(home: Path, proposal_id: str, force: bool = False) -> dict:
             gates = json.loads((src / "gates.json").read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             gates = {}
+    if _contains_stale_gate(gates):
+        return {
+            "status": "refused",
+            "reason": "stale patch revision gates must be refreshed before accept",
+            "gates": gates,
+        }
     gates_passed = _enforce_required_creator_quality_gates(gates)
     if not gates_passed and not force:
         return {

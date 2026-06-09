@@ -721,7 +721,11 @@ def test_patch_proposal_creates_revision_and_stales_gates(tmp_path: Path) -> Non
 
     accepted = proposals_lib.accept_proposal(home, child_id)
     assert accepted["status"] == "refused"
-    assert "gates not all passed" in accepted["reason"]
+    assert "stale patch revision gates" in accepted["reason"]
+
+    forced = proposals_lib.accept_proposal(home, child_id, force=True)
+    assert forced["status"] == "refused"
+    assert "stale patch revision gates" in forced["reason"]
 
 
 def test_patch_proposal_refuses_unsupported_operations(tmp_path: Path) -> None:
@@ -753,9 +757,10 @@ def test_accept_refuses_patch_revision_with_stale_gates_even_if_marked_eligible(
     gates["auto_enable_eligible"] = True
     gates_path.write_text(json.dumps(gates))
 
-    accepted = proposals_lib.accept_proposal(home, child_id)
+    accepted = proposals_lib.accept_proposal(home, child_id, force=True)
 
     assert accepted["status"] == "refused"
+    assert "stale patch revision gates" in accepted["reason"]
     assert accepted["gates"]["smoke"]["stale"] is True
     assert accepted["gates"]["acceptance_compare"]["stale"] is True
 

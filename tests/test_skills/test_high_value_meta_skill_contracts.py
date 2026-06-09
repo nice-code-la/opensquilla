@@ -597,6 +597,8 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     assert "pending meta-skill proposal" in spec.description
     assert "revise meta-skill proposal" in spec.triggers
     assert "patch meta-skill proposal" in spec.triggers
+    assert "revise proposal" in spec.triggers
+    assert "patch proposal" in spec.triggers
     assert steps["clarify_intent"].kind == "llm_chat"
     assert steps["collision_check"].kind == "llm_chat"
     assert steps["risk_classify"].kind == "llm_chat"

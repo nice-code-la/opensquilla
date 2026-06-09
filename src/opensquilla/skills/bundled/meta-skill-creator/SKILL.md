@@ -103,6 +103,9 @@ triggers:
   - "revise meta-skill proposal"
   - "patch meta-skill proposal"
   - "update pending meta-skill proposal"
+  - "revise proposal"
+  - "patch proposal"
+  - "update proposal"
 provenance:
   origin: opensquilla-original
   license: Apache-2.0
