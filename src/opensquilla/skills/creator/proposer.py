@@ -1035,9 +1035,10 @@ def meta_skill_patch_proposal(
     DAG is responsible for turning natural-language edit requests into the
     allowlisted operation shape consumed by proposals_lib.patch_proposal().
     """
+    from opensquilla.paths import default_opensquilla_home
     from opensquilla.skills.proposals_lib import patch_proposal
 
-    home_path = Path(home).expanduser() if home else Path.home() / ".opensquilla"
+    home_path = Path(home).expanduser() if home else default_opensquilla_home()
     try:
         patch_request = json.loads(_strip_code_fences(patch_json or "{}"))
     except json.JSONDecodeError as exc:

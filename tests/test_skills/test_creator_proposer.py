@@ -944,6 +944,51 @@ composition:
     assert gates["revision"]["owner"] == "test-operator"
 
 
+def test_patch_proposal_tool_wrapper_uses_default_state_home(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from opensquilla.skills import proposals_lib
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / "state-home"
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(home))
+    skill_md = """---
+name: synth-env-home-patch
+description: "Patch wrapper honors the configured OpenSquilla state home."
+kind: meta
+meta_priority: 50
+triggers:
+  - "env home patch"
+composition:
+  steps:
+    - id: digest
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+    parent = proposals_lib.write_proposal(
+        home,
+        skill_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+        creator_mode="PERSISTED_PROPOSAL",
+        generation_quality_result={"passed": True},
+        activation_result={"passed": True},
+    )
+
+    out = json.loads(proposer.meta_skill_patch_proposal(
+        parent["proposal_id"],
+        '{"append_body": "Revision note."}',
+    ))
+
+    assert out["status"] == "ok"
+    child_dir = home / "proposals" / out["proposal_id"]
+    assert child_dir.is_dir()
+    assert "Revision note." in (child_dir / "SKILL.md").read_text(encoding="utf-8")
+
+
 def test_fill_slots_prompt_includes_draft_seed(monkeypatch) -> None:
     from opensquilla.skills.creator import proposer
 
