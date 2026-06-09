@@ -166,3 +166,58 @@ def test_patch_action_creates_revision(tmp_path: Path) -> None:
     assert forced_accept["status"] == "refused"
     assert "stale patch revision gates" in forced_accept["reason"]
     assert (home / "proposals" / child_id / "SKILL.md").is_file()
+
+
+def test_benchmark_action_records_report(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    baseline = _run(
+        "write_proposal", home=home,
+        skill_md_inline=SAMPLE_SKILL_MD,
+        lint_result=json.dumps({"G1": {"passed": True}, "G2": {"passed": True}}),
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+    )
+    baseline_id = baseline["proposal_id"]
+    candidate = _run(
+        "patch",
+        home=home,
+        proposal_id=baseline_id,
+        patch_json=json.dumps({
+            "append_eval_prompts": [{
+                "name": "script-benchmark",
+                "prompt": "please use script benchmark child",
+                "rubric": ["Summary"],
+            }],
+        }),
+    )
+    candidate_id = candidate["proposal_id"]
+
+    out = _run(
+        "benchmark",
+        home=home,
+        proposal_id=baseline_id,
+        candidate_proposal_id=candidate_id,
+        comparison_result=json.dumps({
+            "passed": True,
+            "winner": "candidate",
+            "cases": [{
+                "prompt": "please use script benchmark child",
+                "winner": "candidate",
+                "regression": "",
+            }],
+        }),
+    )
+
+    assert out["status"] == "ok"
+    assert out["baseline_proposal_id"] == baseline_id
+    assert out["candidate_proposal_id"] == candidate_id
+    report = json.loads(
+        (
+            home
+            / "proposal-benchmarks"
+            / out["benchmark_id"]
+            / "benchmark.json"
+        ).read_text(encoding="utf-8"),
+    )
+    assert report["creator_mode"] == "BENCHMARK"
+    assert report["eval_prompts"][0]["name"] == "script-benchmark"
+    assert report["gates"]["benchmark_compare"]["passed"] is True

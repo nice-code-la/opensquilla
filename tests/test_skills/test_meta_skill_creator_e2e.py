@@ -349,12 +349,77 @@ def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
     assert "outputs.patch_proposal" in str(steps["final_response"].tool_args["text"])
 
 
+def test_creator_dag_routes_benchmark_without_persist(tmp_path) -> None:
+    loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
+    loader.invalidate_cache()
+    creator_spec = loader.get_by_name("meta-skill-creator")
+    assert creator_spec is not None
+    plan = parse_meta_plan(creator_spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    assert "BENCHMARK" in steps["creator_mode"].output_choices
+
+    extract = steps["extract_benchmark_targets"]
+    assert extract.kind == "tool_call"
+    assert extract.tool == "meta_skill_extract_benchmark_proposal_ids"
+    assert extract.depends_on == ("creator_mode",)
+    assert "outputs.creator_mode == 'BENCHMARK'" in extract.when
+    assert "inputs.baseline_proposal_id" in str(extract.tool_args["baseline_fallback"])
+    assert "inputs.candidate_proposal_id" in str(extract.tool_args["candidate_fallback"])
+
+    benchmark = steps["benchmark_proposals"]
+    assert benchmark.kind == "tool_call"
+    assert benchmark.tool == "meta_skill_benchmark_proposals"
+    assert benchmark.depends_on == ("extract_benchmark_targets",)
+    assert benchmark.tool_args == {
+        "target_json": "{{ outputs.extract_benchmark_targets }}",
+        "comparison_json": "{{ inputs.comparison_json | default('') }}",
+        "eval_prompts_json": "{{ inputs.eval_prompts_json | default('') }}",
+        "home": "{{ inputs.home | default('') }}",
+    }
+
+    for step_id in (
+        "harvest",
+        "pick_pattern",
+        "fill_slots",
+        "assemble",
+        "generation_quality",
+        "activation_eval",
+        "collision_check",
+        "lint",
+        "risk_classify",
+        "smoke",
+        "preview",
+        "persist",
+    ):
+        assert "outputs.creator_mode != 'BENCHMARK'" in steps[step_id].when
+
+    assert "benchmark_proposals" in steps["final_response"].depends_on
+    assert "outputs.benchmark_proposals" in str(steps["final_response"].tool_args["text"])
+
+
 async def test_meta_resolution_routes_pending_proposal_revision_request(tmp_path) -> None:
     loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
     loader.invalidate_cache()
     ctx = SimpleNamespace(
         message="please revise proposal deadbeef to add a safer trigger",
         semantic_message="please revise proposal deadbeef to add a safer trigger",
+        system_prompt=("base system prompt", ""),
+        metadata={"skill_loader": loader},
+    )
+
+    out = await meta_resolution(ctx)  # type: ignore[arg-type]
+
+    assert out.metadata["meta_match"].plan.name == "meta-skill-creator"
+
+
+async def test_meta_resolution_routes_pending_proposal_benchmark_request(tmp_path) -> None:
+    loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
+    loader.invalidate_cache()
+    ctx = SimpleNamespace(
+        message="benchmark proposal abcd1234 against deadbeef",
+        semantic_message="benchmark proposal abcd1234 against deadbeef",
         system_prompt=("base system prompt", ""),
         metadata={"skill_loader": loader},
     )

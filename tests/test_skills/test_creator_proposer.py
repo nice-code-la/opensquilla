@@ -120,6 +120,12 @@ def test_creator_package_import_registers_tools() -> None:
     assert "meta_skill_extract_proposal_id" in names, (
         "meta_skill_extract_proposal_id not registered"
     )
+    assert "meta_skill_benchmark_proposals" in names, (
+        "meta_skill_benchmark_proposals not registered"
+    )
+    assert "meta_skill_extract_benchmark_proposal_ids" in names, (
+        "meta_skill_extract_benchmark_proposal_ids not registered"
+    )
 
 
 def test_meta_skill_fill_slots_retries_once_on_validation_error(monkeypatch) -> None:
@@ -179,6 +185,8 @@ def test_creator_tools_hidden_from_owner_default() -> None:
         "meta_skill_fill_slots",
         "meta_skill_patch_proposal",
         "meta_skill_extract_proposal_id",
+        "meta_skill_benchmark_proposals",
+        "meta_skill_extract_benchmark_proposal_ids",
     ):
         assert tool_name not in visible_names, (
             f"{tool_name} is visible in the default owner tool catalog; "
@@ -192,6 +200,8 @@ def test_creator_tools_hidden_from_owner_default() -> None:
     assert "meta_skill_fill_slots" in registered_names
     assert "meta_skill_patch_proposal" in registered_names
     assert "meta_skill_extract_proposal_id" in registered_names
+    assert "meta_skill_benchmark_proposals" in registered_names
+    assert "meta_skill_extract_benchmark_proposal_ids" in registered_names
 
 
 def test_resolve_provider_config_honors_env_overrides(monkeypatch, tmp_path) -> None:
@@ -348,6 +358,12 @@ def test_creator_tools_registered_via_meta_invoke_module_import() -> None:
     )
     assert "meta_skill_extract_proposal_id" in names, (
         "N10: meta_skill_extract_proposal_id not registered via soft-path import"
+    )
+    assert "meta_skill_benchmark_proposals" in names, (
+        "N10: meta_skill_benchmark_proposals not registered via soft-path import"
+    )
+    assert "meta_skill_extract_benchmark_proposal_ids" in names, (
+        "N10: meta_skill_extract_benchmark_proposal_ids not registered via soft-path import"
     )
 
 
@@ -636,12 +652,17 @@ def test_creator_quality_and_activation_tools_registered() -> None:
     names = set(reg.list_names())
     assert "meta_skill_generation_quality_run" in names
     assert "meta_skill_activation_eval_run" in names
+    assert "meta_skill_benchmark_proposals" in names
 
     activation_tool = reg.get("meta_skill_activation_eval_run")
     assert activation_tool is not None
     assert activation_tool.spec.exposed_by_default is False
     assert "catalog_negative_prompts" in activation_tool.spec.parameters
     assert "threshold" not in activation_tool.spec.parameters
+    benchmark_tool = reg.get("meta_skill_benchmark_proposals")
+    assert benchmark_tool is not None
+    assert benchmark_tool.spec.exposed_by_default is False
+    assert "target_json" in benchmark_tool.spec.parameters
 
 
 def test_generation_quality_tool_returns_utf8_json_string() -> None:
@@ -1006,6 +1027,96 @@ composition:
     child_dir = home / "proposals" / out["proposal_id"]
     assert child_dir.is_dir()
     assert "Revision note." in (child_dir / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_benchmark_proposals_tool_wrapper_records_report(tmp_path) -> None:
+    from opensquilla.skills import proposals_lib
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / ".opensquilla"
+    skill_md = """---
+name: synth-wrapper-benchmark
+description: "Wrapper benchmark test meta-skill."
+kind: meta
+meta_priority: 50
+triggers:
+  - "wrapper benchmark"
+composition:
+  steps:
+    - id: digest
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+    baseline = proposals_lib.write_proposal(
+        home,
+        skill_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+        creator_mode="PERSISTED_PROPOSAL",
+        generation_quality_result={"passed": True},
+        activation_result={"passed": True},
+    )
+    candidate = proposals_lib.patch_proposal(
+        home,
+        baseline["proposal_id"],
+        {
+            "append_eval_prompts": [{
+                "name": "wrapper-benchmark",
+                "prompt": "please use wrapper benchmark",
+                "rubric": ["Summary"],
+            }],
+        },
+    )
+
+    out = json.loads(proposer.meta_skill_benchmark_proposals(
+        target_json=json.dumps({
+            "baseline_proposal_id": baseline["proposal_id"],
+            "candidate_proposal_id": candidate["proposal_id"],
+        }),
+        comparison_json=json.dumps({
+            "passed": True,
+            "winner": "candidate",
+            "cases": [{
+                "prompt": "please use wrapper benchmark",
+                "winner": "candidate",
+                "regression": "",
+            }],
+        }),
+        home=str(home),
+    ))
+
+    assert out["status"] == "ok"
+    report = json.loads(
+        (
+            home
+            / "proposal-benchmarks"
+            / out["benchmark_id"]
+            / "benchmark.json"
+        ).read_text(encoding="utf-8"),
+    )
+    assert report["creator_mode"] == "BENCHMARK"
+    assert report["gates"]["benchmark_compare"]["passed"] is True
+
+
+def test_extract_benchmark_proposal_ids_uses_fallbacks_then_text() -> None:
+    from opensquilla.skills.creator import proposer
+
+    assert json.loads(proposer.meta_skill_extract_benchmark_proposal_ids(
+        "benchmark abcd1234 against deadbeef",
+        baseline_fallback="face1234",
+        candidate_fallback="cafe1234",
+    )) == {
+        "baseline_proposal_id": "face1234",
+        "candidate_proposal_id": "cafe1234",
+    }
+    assert json.loads(proposer.meta_skill_extract_benchmark_proposal_ids(
+        "benchmark abcd1234 against deadbeef",
+    )) == {
+        "baseline_proposal_id": "abcd1234",
+        "candidate_proposal_id": "deadbeef",
+    }
 
 
 def test_fill_slots_prompt_includes_draft_seed(monkeypatch) -> None:

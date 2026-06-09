@@ -612,10 +612,20 @@ def _load_proposal_patch_request(
     return patch_request
 
 
+def _load_json_option(raw: str | None, option_name: str) -> object:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Error: {option_name} must be valid JSON: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+
 @meta_app.command("proposals")
 def proposals_cmd(
     action: str = typer.Argument(
-        ..., help="list | accept | show | patch — proposal CRUD action",
+        ..., help="list | accept | show | patch | benchmark — proposal CRUD action",
     ),
     proposal_id: str | None = typer.Argument(
         None,
@@ -633,6 +643,15 @@ def proposals_cmd(
     owner: str | None = typer.Option(
         None, "--owner", help="Patch revision owner override",
     ),
+    candidate_id: str | None = typer.Option(
+        None, "--candidate-id", help="Candidate proposal id for benchmark action",
+    ),
+    eval_prompts_json: str | None = typer.Option(
+        None, "--eval-prompts-json", help="Inline benchmark eval prompt JSON list",
+    ),
+    comparison_json: str | None = typer.Option(
+        None, "--comparison-json", help="Inline benchmark comparison JSON object",
+    ),
     json_out: bool = typer.Option(False, "--json", help="JSON output"),
 ) -> None:
     """List, inspect, or accept meta-skill proposals.
@@ -641,6 +660,7 @@ def proposals_cmd(
     ``proposals show <id>``             — print one candidate's SKILL.md + gates
     ``proposals accept <id> [--force]`` — promote to MANAGED-layer skill
     ``proposals patch <id> --patch-json '{...}'`` — create a proposal revision
+    ``proposals benchmark <baseline-id> --candidate-id <id>`` — record A/B report
     """
     import json as _json
     import re
@@ -685,7 +705,7 @@ def proposals_cmd(
             )
         return
 
-    if action in ("show", "accept", "patch") and not proposal_id:
+    if action in ("show", "accept", "patch", "benchmark") and not proposal_id:
         typer.echo(f"Error: '{action}' requires a proposal_id argument", err=True)
         raise typer.Exit(2)
 
@@ -694,6 +714,13 @@ def proposals_cmd(
     if proposal_id and not re.fullmatch(r"[0-9a-f]{8}", proposal_id):
         typer.echo(
             f"Error: invalid proposal_id {proposal_id!r} "
+            "(expected 8 lowercase hex chars)",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if candidate_id and not re.fullmatch(r"[0-9a-f]{8}", candidate_id):
+        typer.echo(
+            f"Error: invalid candidate_id {candidate_id!r} "
             "(expected 8 lowercase hex chars)",
             err=True,
         )
@@ -743,6 +770,34 @@ def proposals_cmd(
             )
             return
         reason = str(result.get("reason") or "proposal patch failed")
+        status = str(result.get("status") or "error")
+        typer.echo(f"{status.title()}: {reason}", err=True)
+        raise typer.Exit(1)
+
+    if action == "benchmark":
+        if not candidate_id:
+            typer.echo("Error: benchmark requires --candidate-id", err=True)
+            raise typer.Exit(2)
+        result = proposals_lib.benchmark_proposals(
+            _proposals_home(),
+            proposal_id or "",
+            candidate_id,
+            eval_prompts=_load_json_option(eval_prompts_json, "--eval-prompts-json"),
+            comparison_result=_load_json_option(comparison_json, "--comparison-json"),
+        )
+        if json_out:
+            typer.echo(_json.dumps(result))
+            if result.get("status") == "error":
+                raise typer.Exit(1)
+            return
+        if result.get("status") == "ok":
+            typer.echo(
+                f"Benchmarked proposal {result.get('baseline_proposal_id')} "
+                f"vs {result.get('candidate_proposal_id')} "
+                f"-> {result.get('benchmark_id')}"
+            )
+            return
+        reason = str(result.get("reason") or "proposal benchmark unavailable")
         status = str(result.get("status") or "error")
         typer.echo(f"{status.title()}: {reason}", err=True)
         raise typer.Exit(1)

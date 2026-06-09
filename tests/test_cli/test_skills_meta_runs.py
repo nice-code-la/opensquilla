@@ -331,3 +331,83 @@ composition:
     assert forced_accept.exit_code == 1
     assert "stale patch revision gates" in forced_accept.output
     assert (tmp_path / "proposals" / child_id / "SKILL.md").is_file()
+
+
+def test_proposals_benchmark_cli_records_report(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(tmp_path))
+    parent = proposals_lib.write_proposal(
+        tmp_path,
+        """---
+name: cli-benchmark-parent
+description: "Original CLI benchmark proposal"
+kind: meta
+triggers:
+  - "cli benchmark parent"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+""",
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    baseline_id = parent["proposal_id"]
+    patched = proposals_lib.patch_proposal(
+        tmp_path,
+        baseline_id,
+        {
+            "append_eval_prompts": [{
+                "name": "cli-benchmark",
+                "prompt": "please use cli benchmark child",
+                "rubric": ["Summary"],
+            }],
+        },
+    )
+    candidate_id = patched["proposal_id"]
+
+    result = runner.invoke(
+        cli_app,
+        [
+            "skills",
+            "meta",
+            "proposals",
+            "benchmark",
+            baseline_id,
+            "--candidate-id",
+            candidate_id,
+            "--comparison-json",
+            json.dumps({
+                "passed": True,
+                "winner": "candidate",
+                "cases": [{
+                    "prompt": "please use cli benchmark child",
+                    "winner": "candidate",
+                    "regression": "",
+                }],
+            }),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["status"] == "ok"
+    assert data["baseline_proposal_id"] == baseline_id
+    assert data["candidate_proposal_id"] == candidate_id
+    report = json.loads(
+        (
+            tmp_path
+            / "proposal-benchmarks"
+            / data["benchmark_id"]
+            / "benchmark.json"
+        ).read_text(encoding="utf-8"),
+    )
+    assert report["creator_mode"] == "BENCHMARK"
+    assert report["gates"]["benchmark_compare"]["passed"] is True

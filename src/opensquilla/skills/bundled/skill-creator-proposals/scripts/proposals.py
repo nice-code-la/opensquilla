@@ -100,6 +100,25 @@ def cmd_patch(args: argparse.Namespace) -> dict:
     )
 
 
+def _load_json_arg(raw: str | None, label: str) -> object:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be valid JSON") from exc
+
+
+def cmd_benchmark(args: argparse.Namespace) -> dict:
+    return proposals_lib.benchmark_proposals(
+        Path(args.home),
+        args.proposal_id,
+        args.candidate_proposal_id,
+        eval_prompts=_load_json_arg(args.eval_prompts, "--eval-prompts"),
+        comparison_result=_load_json_arg(args.comparison_result, "--comparison-result"),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -107,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         choices=[
             "write_proposal", "list", "show", "accept", "reject",
-            "pending_count", "patch",
+            "pending_count", "patch", "benchmark",
         ],
     )
     p.add_argument(
@@ -134,6 +153,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--patch-json", default=None)
     p.add_argument("--patch-file", default=None)
     p.add_argument("--owner", default=None)
+    p.add_argument("--candidate-proposal-id", default=None)
+    p.add_argument("--eval-prompts", default=None)
+    p.add_argument("--comparison-result", default=None)
     args = p.parse_args(argv)
 
     dispatch = {
@@ -144,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         "reject": cmd_reject,
         "pending_count": cmd_pending_count,
         "patch": cmd_patch,
+        "benchmark": cmd_benchmark,
     }
     try:
         result = dispatch[args.action](args)

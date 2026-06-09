@@ -82,6 +82,10 @@ def skills_dir(home: Path) -> Path:
     return home / "skills"
 
 
+def benchmarks_dir(home: Path) -> Path:
+    return home / "proposal-benchmarks"
+
+
 def is_valid_proposal_id(proposal_id: str | None) -> bool:
     if not proposal_id:
         return False
@@ -114,6 +118,26 @@ def atomic_write_proposal(
     final_dir = proposals / proposal_id
     tmp_dir.rename(final_dir)
     return proposal_id
+
+
+def atomic_write_benchmark(home: Path, report: dict) -> str:
+    """Materialise a proposal benchmark report atomically."""
+    benchmarks = benchmarks_dir(home)
+    benchmarks.mkdir(parents=True, exist_ok=True)
+    benchmark_id = uuid.uuid4().hex[:8]
+
+    tmp_parent = home / ".tmp"
+    tmp_parent.mkdir(parents=True, exist_ok=True)
+    tmp_dir = tmp_parent / f"proposal-benchmark-{benchmark_id}"
+    tmp_dir.mkdir()
+    (tmp_dir / "benchmark.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    final_dir = benchmarks / benchmark_id
+    tmp_dir.rename(final_dir)
+    return benchmark_id
 
 
 def _normalise_acceptance_result(acceptance_result: object) -> dict:
@@ -910,6 +934,220 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
         "proposal_id": child_id,
         "parent_proposal_id": proposal_id,
         "auto_enable_eligible": False,
+    }
+
+
+def _load_pending_skill(home: Path, proposal_id: str) -> tuple[str | None, dict | None]:
+    if not is_valid_proposal_id(proposal_id):
+        return None, {
+            "status": "error",
+            "reason": "invalid proposal_id format",
+            "proposal_id": proposal_id,
+        }
+    proposal_dir = proposals_dir(home) / proposal_id
+    skill_path = proposal_dir / "SKILL.md"
+    if not skill_path.is_file():
+        return None, {
+            "status": "error",
+            "reason": f"proposal {proposal_id} not found",
+            "proposal_id": proposal_id,
+        }
+    return skill_path.read_text(encoding="utf-8"), None
+
+
+def _normalise_eval_prompts(value: object) -> list[dict]:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return [{
+                "name": "inline-prompt",
+                "prompt": text,
+            }]
+        return _normalise_eval_prompts(parsed)
+    if not isinstance(value, list):
+        return []
+    prompts: list[dict] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            prompt = item.strip()
+            if not prompt or prompt in seen:
+                continue
+            seen.add(prompt)
+            prompts.append({
+                "name": f"prompt-{len(prompts) + 1}",
+                "prompt": prompt,
+            })
+            continue
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt or prompt in seen:
+            continue
+        seen.add(prompt)
+        prompts.append(dict(_json_safe_value(item, "eval_prompts")))
+    return prompts
+
+
+def _extract_eval_prompts_from_skill(skill_md: str) -> list[dict]:
+    try:
+        frontmatter, _body = _split_skill_markdown(skill_md)
+    except (ValueError, yaml.YAMLError):
+        return []
+    return _normalise_eval_prompts(frontmatter.get("eval_prompts"))
+
+
+def _benchmark_prompts(
+    baseline_skill_md: str,
+    candidate_skill_md: str,
+    eval_prompts: object,
+) -> list[dict]:
+    explicit = _normalise_eval_prompts(eval_prompts)
+    if explicit:
+        return explicit
+    candidate_prompts = _extract_eval_prompts_from_skill(candidate_skill_md)
+    if candidate_prompts:
+        return candidate_prompts
+    return _extract_eval_prompts_from_skill(baseline_skill_md)
+
+
+def _normalise_benchmark_result(comparison_result: object) -> dict:
+    if comparison_result is None:
+        return {}
+    if isinstance(comparison_result, dict):
+        return dict(comparison_result)
+    if isinstance(comparison_result, str):
+        text = comparison_result.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {"raw": text}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"raw": text}
+    return {"raw": str(comparison_result)}
+
+
+def _evaluate_benchmark_compare(
+    comparison_result: object,
+    prompt_count: int,
+) -> dict:
+    payload = _normalise_benchmark_result(comparison_result)
+    if not payload:
+        return {
+            "required": True,
+            "passed": False,
+            "reason": "missing_benchmark_comparison",
+            "winner": "",
+            "cases": [],
+            "prompt_count": prompt_count,
+        }
+    winner = str(payload.get("winner") or "").strip().lower()
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        cases = []
+    blockers: list[str] = []
+    for index, case in enumerate(cases):
+        if not isinstance(case, dict):
+            continue
+        case_winner = str(case.get("winner") or "").strip().lower()
+        regression = str(case.get("regression") or "").strip()
+        if case_winner not in {"candidate", "tie"}:
+            blockers.append(f"case_{index}_winner:{case_winner or 'missing'}")
+        if regression:
+            blockers.append(f"case_{index}_regression")
+
+    passed_value = payload.get("passed", False)
+    passed_is_bool = isinstance(passed_value, bool)
+    quality_score: float | None = None
+    quality_score_raw = payload.get("quality_score")
+    if quality_score_raw not in (None, ""):
+        try:
+            quality_score = float(str(quality_score_raw))
+        except (TypeError, ValueError):
+            quality_score = None
+    quality_passed = quality_score is None or quality_score >= 0.80
+    if not quality_passed:
+        blockers.append("quality_score_below_0.80")
+
+    passed = (
+        passed_value is True
+        and passed_is_bool
+        and winner in {"candidate", "tie"}
+        and not blockers
+    )
+    reason = str(payload.get("reason") or "benchmark_compare_failed")
+    if "passed" in payload and not passed_is_bool:
+        reason = "invalid_benchmark_passed_type"
+    return {
+        "required": True,
+        "passed": passed,
+        "reason": "ok" if passed else reason,
+        "winner": winner,
+        "quality_score": quality_score,
+        "prompt_count": prompt_count,
+        "cases": [
+            dict(_json_safe_value(case, "benchmark_cases"))
+            for case in cases
+            if isinstance(case, dict)
+        ],
+        "diagnostics": blockers,
+        "raw": payload.get("raw", ""),
+    }
+
+
+def benchmark_proposals(
+    home: Path,
+    baseline_proposal_id: str,
+    candidate_proposal_id: str,
+    *,
+    eval_prompts: object = None,
+    comparison_result: object = None,
+) -> dict:
+    """Record a non-promoting A/B benchmark for two pending proposals."""
+    baseline_skill_md, baseline_error = _load_pending_skill(home, baseline_proposal_id)
+    if baseline_error is not None:
+        return baseline_error
+    candidate_skill_md, candidate_error = _load_pending_skill(home, candidate_proposal_id)
+    if candidate_error is not None:
+        return candidate_error
+    assert baseline_skill_md is not None
+    assert candidate_skill_md is not None
+
+    prompts = _benchmark_prompts(baseline_skill_md, candidate_skill_md, eval_prompts)
+    if not prompts:
+        return {
+            "status": "unavailable",
+            "reason": "benchmark_prompts_missing",
+            "baseline_proposal_id": baseline_proposal_id,
+            "candidate_proposal_id": candidate_proposal_id,
+        }
+
+    benchmark_gate = _evaluate_benchmark_compare(comparison_result, len(prompts))
+    report = {
+        "creator_mode": "BENCHMARK",
+        "baseline_proposal_id": baseline_proposal_id,
+        "candidate_proposal_id": candidate_proposal_id,
+        "eval_prompts": prompts,
+        "gates": {
+            "benchmark_compare": benchmark_gate,
+        },
+        "auto_enable_eligible": False,
+    }
+    benchmark_id = atomic_write_benchmark(home, report)
+    return {
+        "status": "ok",
+        "benchmark_id": benchmark_id,
+        "baseline_proposal_id": baseline_proposal_id,
+        "candidate_proposal_id": candidate_proposal_id,
+        "auto_enable_eligible": False,
+        "passed": benchmark_gate["passed"],
     }
 
 

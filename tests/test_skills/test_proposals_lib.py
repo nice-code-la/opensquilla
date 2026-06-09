@@ -783,6 +783,81 @@ def test_patch_proposal_refuses_malformed_parent_revision(tmp_path: Path) -> Non
     assert proposals_lib.pending_count(home) == {"count": 1}
 
 
+def test_benchmark_proposals_reuses_revision_eval_prompts_and_records_report(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    baseline_id = _seed_proposal(home)
+    patched = proposals_lib.patch_proposal(
+        home,
+        baseline_id,
+        {
+            "append_eval_prompts": [{
+                "name": "refined-positive",
+                "prompt": "please use refined synth trigger",
+                "rubric": ["Summary"],
+            }],
+            "owner": "unit-test",
+        },
+    )
+    candidate_id = patched["proposal_id"]
+
+    result = proposals_lib.benchmark_proposals(
+        home,
+        baseline_id,
+        candidate_id,
+        comparison_result={
+            "status": "ok",
+            "passed": True,
+            "winner": "candidate",
+            "quality_score": 0.91,
+            "cases": [{
+                "prompt": "please use refined synth trigger",
+                "winner": "candidate",
+                "regression": "",
+            }],
+        },
+    )
+
+    assert result["status"] == "ok"
+    assert result["auto_enable_eligible"] is False
+    benchmark_id = result["benchmark_id"]
+    report_path = home / "proposal-benchmarks" / benchmark_id / "benchmark.json"
+    assert report_path.is_file()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["creator_mode"] == "BENCHMARK"
+    assert report["baseline_proposal_id"] == baseline_id
+    assert report["candidate_proposal_id"] == candidate_id
+    assert report["eval_prompts"] == [{
+        "name": "refined-positive",
+        "prompt": "please use refined synth trigger",
+        "rubric": ["Summary"],
+    }]
+    assert report["gates"]["benchmark_compare"]["passed"] is True
+    assert report["gates"]["benchmark_compare"]["winner"] == "candidate"
+    assert report["gates"]["benchmark_compare"]["quality_score"] == 0.91
+    assert (home / "proposals" / baseline_id / "SKILL.md").is_file()
+    assert (home / "proposals" / candidate_id / "SKILL.md").is_file()
+
+
+def test_benchmark_proposals_marks_missing_eval_prompts_unavailable(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    baseline_id = _seed_proposal(home)
+    candidate_id = _seed_proposal(home)
+
+    result = proposals_lib.benchmark_proposals(home, baseline_id, candidate_id)
+
+    assert result == {
+        "status": "unavailable",
+        "reason": "benchmark_prompts_missing",
+        "baseline_proposal_id": baseline_id,
+        "candidate_proposal_id": candidate_id,
+    }
+    assert not (home / "proposal-benchmarks").exists()
+
+
 def test_accept_refuses_stale_required_creator_proposal_missing_new_gates(
     tmp_path: Path,
 ) -> None:

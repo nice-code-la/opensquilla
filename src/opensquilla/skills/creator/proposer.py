@@ -1076,6 +1076,96 @@ def meta_skill_extract_proposal_id(text: str, fallback: str = "") -> str:
     return ""
 
 
+def meta_skill_extract_benchmark_proposal_ids(
+    text: str,
+    baseline_fallback: str = "",
+    candidate_fallback: str = "",
+) -> str:
+    """Extract baseline/candidate proposal ids for non-promoting benchmarks."""
+    from opensquilla.skills.proposals_lib import is_valid_proposal_id
+
+    baseline = (baseline_fallback or "").strip()
+    candidate = (candidate_fallback or "").strip()
+    ids = [
+        match.group(0)
+        for match in _re.finditer(r"(?<![0-9a-f])[0-9a-f]{8}(?![0-9a-f])", text or "")
+    ]
+    if not is_valid_proposal_id(baseline):
+        baseline = ids[0] if ids and is_valid_proposal_id(ids[0]) else ""
+    if not is_valid_proposal_id(candidate):
+        candidate = ""
+        for proposal_id in ids:
+            if proposal_id != baseline and is_valid_proposal_id(proposal_id):
+                candidate = proposal_id
+                break
+    return json.dumps({
+        "baseline_proposal_id": baseline,
+        "candidate_proposal_id": candidate,
+    }, ensure_ascii=False)
+
+
+def _json_or_none(raw: str, reason: str) -> tuple[object, dict | None]:
+    if not raw:
+        return None, None
+    try:
+        return json.loads(_strip_code_fences(raw)), None
+    except json.JSONDecodeError as exc:
+        return None, {
+            "status": "refused",
+            "reason": reason,
+            "detail": str(exc),
+        }
+
+
+def meta_skill_benchmark_proposals(
+    baseline_proposal_id: str = "",
+    candidate_proposal_id: str = "",
+    target_json: str = "",
+    comparison_json: str = "",
+    eval_prompts_json: str = "",
+    home: str = "",
+) -> str:
+    """Record a non-promoting benchmark for two pending proposal revisions."""
+    from opensquilla.paths import default_opensquilla_home
+    from opensquilla.skills.proposals_lib import benchmark_proposals
+
+    home_path = Path(home).expanduser() if home else default_opensquilla_home()
+    target_payload, target_error = _json_or_none(target_json, "invalid_benchmark_targets")
+    if target_error is not None:
+        return json.dumps(target_error, ensure_ascii=False)
+    if isinstance(target_payload, dict):
+        baseline_proposal_id = (
+            baseline_proposal_id
+            or str(target_payload.get("baseline_proposal_id") or "")
+        )
+        candidate_proposal_id = (
+            candidate_proposal_id
+            or str(target_payload.get("candidate_proposal_id") or "")
+        )
+
+    comparison_result, comparison_error = _json_or_none(
+        comparison_json,
+        "invalid_benchmark_comparison_json",
+    )
+    if comparison_error is not None:
+        return json.dumps(comparison_error, ensure_ascii=False)
+    eval_prompts, eval_error = _json_or_none(
+        eval_prompts_json,
+        "invalid_benchmark_eval_prompts_json",
+    )
+    if eval_error is not None:
+        return json.dumps(eval_error, ensure_ascii=False)
+
+    result = benchmark_proposals(
+        home_path,
+        baseline_proposal_id,
+        candidate_proposal_id,
+        eval_prompts=eval_prompts,
+        comparison_result=comparison_result,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 def _maybe_auto_enable_manual_proposal(
     home: Path,
     proposal_id: str,
@@ -1393,6 +1483,70 @@ async def meta_skill_extract_proposal_id_tool(
     fallback: str = "",
 ) -> str:
     return meta_skill_extract_proposal_id(text, fallback)
+
+
+@tool(
+    name="meta_skill_extract_benchmark_proposal_ids",
+    description=(
+        "Extract baseline and candidate pending proposal ids from a user "
+        "message or explicit fallback strings. Returns JSON."
+    ),
+    params={
+        "text": {"type": "string"},
+        "baseline_fallback": {"type": "string"},
+        "candidate_fallback": {"type": "string"},
+    },
+    required=["text"],
+    exposed_by_default=False,
+)
+async def meta_skill_extract_benchmark_proposal_ids_tool(
+    text: str,
+    baseline_fallback: str = "",
+    candidate_fallback: str = "",
+) -> str:
+    return meta_skill_extract_benchmark_proposal_ids(
+        text,
+        baseline_fallback,
+        candidate_fallback,
+    )
+
+
+@tool(
+    name="meta_skill_benchmark_proposals",
+    description=(
+        "Record a non-promoting benchmark report comparing two pending "
+        "proposal revisions over eval prompts."
+    ),
+    params={
+        "baseline_proposal_id": {"type": "string"},
+        "candidate_proposal_id": {"type": "string"},
+        "target_json": {"type": "string"},
+        "comparison_json": {"type": "string"},
+        "eval_prompts_json": {"type": "string"},
+        "home": {"type": "string"},
+    },
+    required=[],
+    exposed_by_default=False,
+)
+async def meta_skill_benchmark_proposals_tool(
+    baseline_proposal_id: str = "",
+    candidate_proposal_id: str = "",
+    target_json: str = "",
+    comparison_json: str = "",
+    eval_prompts_json: str = "",
+    home: str = "",
+) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(
+        meta_skill_benchmark_proposals,
+        baseline_proposal_id,
+        candidate_proposal_id,
+        target_json,
+        comparison_json,
+        eval_prompts_json,
+        home,
+    )
 
 
 _PATTERN_ENUM = sorted(PATTERN_SLOT_SCHEMA.keys())

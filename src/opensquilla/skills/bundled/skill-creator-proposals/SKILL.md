@@ -1,6 +1,6 @@
 ---
 name: skill-creator-proposals
-description: "Internal tool (not user-invocable). Called by meta-skill-creator's persist step and by `opensquilla skills meta proposals` CLI to manage `~/.opensquilla/proposals/`: write_proposal / list / show / patch / accept. Returns JSON."
+description: "Internal tool (not user-invocable). Called by meta-skill-creator's persist/patch/benchmark steps and by `opensquilla skills meta proposals` CLI to manage `~/.opensquilla/proposals/`: write_proposal / list / show / patch / benchmark / accept. Returns JSON."
 user-invocable: false
 disable-model-invocation: true
 provenance:
@@ -34,6 +34,12 @@ entrypoint:
     - "{{ with.patch_file | default('') }}"
     - --owner
     - "{{ with.owner | default('') }}"
+    - --candidate-proposal-id
+    - "{{ with.candidate_proposal_id | default('') }}"
+    - --eval-prompts
+    - "{{ with.eval_prompts | default('') }}"
+    - --comparison-result
+    - "{{ with.comparison_result | default('') }}"
   parse: json
   timeout: 30
 ---
@@ -48,6 +54,7 @@ CRUD for meta-skill proposal candidates at `~/.opensquilla/proposals/<id>/`.
 - `list` — enumerate proposals with their eligibility flag
 - `show --proposal-id <id>` — return a proposal's `SKILL.md` and gate payload
 - `patch --proposal-id <id> (--patch-json json | --patch-file path) [--owner owner]` — apply an allowlisted structured patch to a pending proposal and write a child revision with stale gates
+- `benchmark --proposal-id <baseline-id> --candidate-proposal-id <candidate-id> [--eval-prompts json --comparison-result json]` — record a non-promoting A/B report under `~/.opensquilla/proposal-benchmarks/<uuid8>/benchmark.json`, reusing proposal `eval_prompts` when explicit prompts are omitted
 - `accept --proposal-id <id> [--force]` — move proposal to `~/.opensquilla/skills/<name>/` so it gets loaded by MANAGED layer; refuses if any gate failed (unless `--force`)
 
 ## Atomicity

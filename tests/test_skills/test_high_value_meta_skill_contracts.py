@@ -574,6 +574,7 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
         "PERSISTED_PROPOSAL",
         "FULL_GATED",
         "PATCH_PROPOSAL",
+        "BENCHMARK",
     }
     assert set(steps["pick_pattern"].output_choices) == {
         "p1_sequential",
@@ -592,13 +593,17 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
         steps["clarify_intent"].with_args["task"]
     ).lower()
     assert "PATCH_PROPOSAL" in creator_mode_text
+    assert "BENCHMARK" in creator_mode_text
     spec = loader.get_by_name("meta-skill-creator")
     assert spec is not None
     assert "pending meta-skill proposal" in spec.description
+    assert "benchmark two pending proposal revisions" in spec.description
     assert "revise meta-skill proposal" in spec.triggers
     assert "patch meta-skill proposal" in spec.triggers
     assert "revise proposal" in spec.triggers
     assert "patch proposal" in spec.triggers
+    assert "benchmark proposal" in spec.triggers
+    assert "compare proposal revisions" in spec.triggers
     assert steps["clarify_intent"].kind == "llm_chat"
     assert steps["collision_check"].kind == "llm_chat"
     assert steps["risk_classify"].kind == "llm_chat"
@@ -610,6 +615,8 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
         "build_patch_request",
         "extract_patch_target",
         "patch_proposal",
+        "extract_benchmark_targets",
+        "benchmark_proposals",
         "harvest",
         "pick_pattern",
         "fill_slots",
@@ -630,12 +637,18 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     assert "outputs.creator_mode == 'PATCH_PROPOSAL'" in steps["build_patch_request"].when
     assert steps["extract_patch_target"].tool == "meta_skill_extract_proposal_id"
     assert steps["patch_proposal"].tool == "meta_skill_patch_proposal"
+    assert "outputs.creator_mode == 'BENCHMARK'" in steps["extract_benchmark_targets"].when
+    assert steps["extract_benchmark_targets"].tool == (
+        "meta_skill_extract_benchmark_proposal_ids"
+    )
+    assert steps["benchmark_proposals"].tool == "meta_skill_benchmark_proposals"
     assert "outputs.creator_mode != 'PREVIEW_ONLY'" in steps["smoke"].when
     assert "outputs.creator_mode != 'PREVIEW_ONLY'" in steps["persist"].when
     assert steps["final_response"].depends_on == (
         "preview",
         "normal_skill_exit",
         "patch_proposal",
+        "benchmark_proposals",
     )
     assert steps["final_response"].tool == "emit_text"
 
