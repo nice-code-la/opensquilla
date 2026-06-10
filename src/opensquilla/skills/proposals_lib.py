@@ -2116,6 +2116,73 @@ def _learning_lessons(value: object) -> list[str]:
     return lessons
 
 
+def _read_creator_learning_events(home: Path, *, max_events: int = 200) -> list[dict]:
+    path = creator_learning_events_path(home)
+    if not path.is_file():
+        return []
+    rows: list[dict] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for line in lines[-max_events:]:
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            rows.append(parsed)
+    return rows
+
+
+def creator_learning_summary(home: Path, *, max_events: int = 200) -> dict:
+    """Return compact advisory memory from sanitized creator learning events."""
+    events = _read_creator_learning_events(home, max_events=max_events)
+    counts = {event_type: 0 for event_type in sorted(_CREATOR_LEARNING_EVENT_TYPES)}
+    lessons: list[str] = []
+    rollback_reasons: list[str] = []
+    for event in events:
+        event_type = str(event.get("event_type") or "")
+        if event_type in counts:
+            counts[event_type] += 1
+        if event_type == "rolled_back":
+            skill_name = _learning_text(event.get("skill_name"), max_chars=80)
+            reason = _learning_text(event.get("reason"))
+            if skill_name and reason:
+                text = f"{skill_name}: {reason}"
+            else:
+                text = reason or skill_name
+            if text and text not in rollback_reasons:
+                rollback_reasons.append(text)
+        for lesson in _learning_lessons(event.get("lessons")):
+            if lesson not in lessons:
+                lessons.append(lesson)
+        if len(lessons) >= 8 and len(rollback_reasons) >= 5:
+            continue
+
+    count_text = " ".join(
+        f"{event_type}={counts[event_type]}" for event_type in sorted(counts)
+    )
+    parts = [f"Creator learning counts: {count_text}."]
+    if rollback_reasons:
+        parts.append(
+            "Rollback warnings: "
+            + "; ".join(rollback_reasons[:5])
+            + "."
+        )
+    if lessons:
+        parts.append("Lessons: " + "; ".join(lessons[:8]) + ".")
+    if len(parts) == 1:
+        parts.append("No lessons or rollback warnings recorded yet.")
+    return {
+        "status": "ok",
+        "path": str(creator_learning_events_path(home)),
+        "event_count": len(events),
+        "counts": counts,
+        "summary": " ".join(parts),
+    }
+
+
 def _sanitize_creator_learning_event(event: object) -> dict | None:
     if not isinstance(event, dict):
         return None
@@ -2235,6 +2302,7 @@ __all__ = [
     "auto_propose_settings_path",
     "creator_learning_dir",
     "creator_learning_events_path",
+    "creator_learning_summary",
     "disable_auto_enabled_skill",
     "is_valid_proposal_id",
     "list_auto_enabled_skills",

@@ -211,6 +211,56 @@ def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) ->
     assert rows[2]["restored_proposal_id"] == "deadbeef"
 
 
+def test_creator_learning_summary_compacts_recent_events(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "accepted",
+            "proposal_id": "abcd1234",
+            "skill_name": "learn-skill",
+            "outcome": "accepted",
+            "lessons": ["keep trigger narrow", "do not expose secrets"],
+            "secret": "must not leak",
+        },
+    )
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "benchmarked",
+            "baseline_proposal_id": "abcd1234",
+            "candidate_proposal_id": "deadbeef",
+            "benchmark_id": "01234567",
+            "passed": True,
+            "lessons": ["candidate won on groundedness"],
+        },
+    )
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "rolled_back",
+            "skill_name": "learn-skill",
+            "restored_proposal_id": "deadbeef",
+            "reason": "overbroad trigger",
+            "lessons": ["avoid broad activation"],
+        },
+    )
+
+    summary = proposals_lib.creator_learning_summary(home)
+
+    assert summary["status"] == "ok"
+    assert summary["event_count"] == 3
+    text = summary["summary"]
+    assert "accepted=1" in text
+    assert "benchmarked=1" in text
+    assert "rolled_back=1" in text
+    assert "learn-skill: overbroad trigger" in text
+    assert "keep trigger narrow" in text
+    assert "candidate won on groundedness" in text
+    assert "must not leak" not in text
+
+
 def test_pending_count_on_empty_home(tmp_path: Path) -> None:
     home = tmp_path / "empty"
     assert proposals_lib.pending_count(home) == {"count": 0}

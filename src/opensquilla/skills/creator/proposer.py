@@ -1198,6 +1198,16 @@ def meta_skill_rollback_skill(skill_name: str, home: str = "") -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def meta_skill_creator_learning_summary(home: str = "") -> str:
+    """Return compact creator lifecycle memory for slot filling."""
+    from opensquilla.paths import default_opensquilla_home
+    from opensquilla.skills.proposals_lib import creator_learning_summary
+
+    home_path = Path(home).expanduser() if home else default_opensquilla_home()
+    result = creator_learning_summary(home_path)
+    return json.dumps(result, ensure_ascii=False)
+
+
 def meta_skill_refresh_proposal_gates(
     proposal_id: str,
     *,
@@ -1675,6 +1685,24 @@ async def meta_skill_refresh_proposal_gates_tool(
         activation_json=activation_json,
         home=home,
     )
+
+
+@tool(
+    name="meta_skill_creator_learning_summary",
+    description=(
+        "Return compact advisory memory from prior meta-skill proposal "
+        "acceptance, benchmark, and rollback events. Returns JSON."
+    ),
+    params={
+        "home": {"type": "string"},
+    },
+    required=[],
+    exposed_by_default=False,
+)
+async def meta_skill_creator_learning_summary_tool(home: str = "") -> str:
+    import asyncio
+
+    return await asyncio.to_thread(meta_skill_creator_learning_summary, home)
 
 
 @tool(

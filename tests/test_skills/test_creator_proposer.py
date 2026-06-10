@@ -169,6 +169,9 @@ def test_creator_package_import_registers_tools() -> None:
     assert "meta_skill_refresh_proposal_gates" in names, (
         "meta_skill_refresh_proposal_gates not registered"
     )
+    assert "meta_skill_creator_learning_summary" in names, (
+        "meta_skill_creator_learning_summary not registered"
+    )
     assert "meta_skill_extract_proposal_id" in names, (
         "meta_skill_extract_proposal_id not registered"
     )
@@ -243,6 +246,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
         "meta_skill_benchmark_proposals",
         "meta_skill_extract_benchmark_proposal_ids",
         "meta_skill_rollback_skill",
+        "meta_skill_creator_learning_summary",
     ):
         assert tool_name not in visible_names, (
             f"{tool_name} is visible in the default owner tool catalog; "
@@ -256,6 +260,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
     assert "meta_skill_fill_slots" in registered_names
     assert "meta_skill_patch_proposal" in registered_names
     assert "meta_skill_refresh_proposal_gates" in registered_names
+    assert "meta_skill_creator_learning_summary" in registered_names
     assert "meta_skill_extract_proposal_id" in registered_names
     assert "meta_skill_benchmark_proposals" in registered_names
     assert "meta_skill_extract_benchmark_proposal_ids" in registered_names

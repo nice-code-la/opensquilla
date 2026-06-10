@@ -323,10 +323,16 @@ def test_creator_dag_forwards_optional_learning_summary_to_fill_slots() -> None:
     assert plan is not None
     steps = {step.id: step for step in plan.steps}
 
+    learning_summary = steps["learning_summary"]
+    assert learning_summary.kind == "tool_call"
+    assert learning_summary.tool == "meta_skill_creator_learning_summary"
+    assert learning_summary.depends_on == ("creator_mode",)
+
+    assert "learning_summary" in steps["fill_slots"].depends_on
     fill_slots_intent = str(steps["fill_slots"].tool_args["user_intent"])
     assert "Creator learning summary" in fill_slots_intent
     assert (
-        '{{ inputs.creator_learning_summary | default("") | xml_escape | truncate(2000) }}'
+        '{{ outputs.learning_summary | default(inputs.creator_learning_summary | default("")) | xml_escape | truncate(2000) }}'
         in fill_slots_intent
     )
     assert "advisory memory" in fill_slots_intent

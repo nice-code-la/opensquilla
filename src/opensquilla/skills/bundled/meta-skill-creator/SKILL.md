@@ -371,6 +371,16 @@ composition:
         eval_prompts_json: "{{ inputs.eval_prompts_json | default('') }}"
         home: "{{ inputs.home | default('') }}"
 
+    - id: learning_summary
+      label: "学习摘要"
+      label_en: "Learning summary"
+      kind: tool_call
+      depends_on: [creator_mode]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      tool: meta_skill_creator_learning_summary
+      tool_args:
+        home: "{{ inputs.home | default('') }}"
+
     - id: harvest
       label: "需求采集"
       label_en: "Requirement capture"
@@ -418,7 +428,7 @@ composition:
       label: "填充槽位"
       label_en: "Fill slots"
       kind: tool_call
-      depends_on: [pick_pattern]
+      depends_on: [pick_pattern, learning_summary]
       when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_fill_slots
       tool_args:
@@ -433,7 +443,7 @@ composition:
           {{ outputs.clarify_intent | truncate(1000) }}
 
           Creator learning summary (optional advisory memory):
-          {{ inputs.creator_learning_summary | default("") | xml_escape | truncate(2000) }}
+          {{ outputs.learning_summary | default(inputs.creator_learning_summary | default("")) | xml_escape | truncate(2000) }}
           Treat this as advisory memory from prior accepted, benchmarked, or
           rolled-back proposals. It may suggest failure patterns or successful
           shapes, but current user requirements and gates still win.
