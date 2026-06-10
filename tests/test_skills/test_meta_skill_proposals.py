@@ -165,6 +165,7 @@ def test_patch_action_creates_revision(tmp_path: Path) -> None:
         "patch",
         home=home,
         proposal_id=parent_id,
+        expected_parent_revision=1,
         patch_json=json.dumps({
             "add_triggers": ["patched trigger"],
             "owner": "script-test",
@@ -178,6 +179,9 @@ def test_patch_action_creates_revision(tmp_path: Path) -> None:
     gates = json.loads((home / "proposals" / child_id / "gates.json").read_text())
     assert gates["revision"]["parent_proposal_id"] == parent_id
     assert gates["revision"]["owner"] == "script-test"
+    parent_gates = json.loads((home / "proposals" / parent_id / "gates.json").read_text())
+    assert parent_gates["latest_child_proposal_id"] == child_id
+    assert parent_gates["latest_child_revision"] == 2
 
     forced_accept = _run(
         "accept",

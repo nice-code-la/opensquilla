@@ -869,6 +869,38 @@ def test_patch_proposal_refuses_malformed_parent_revision(tmp_path: Path) -> Non
     assert proposals_lib.pending_count(home) == {"count": 1}
 
 
+def test_patch_proposal_records_latest_child_and_refuses_stale_expected_revision(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    parent_id = _seed_proposal(home)
+
+    first = proposals_lib.patch_proposal(
+        home,
+        parent_id,
+        {"add_triggers": ["first child"]},
+        expected_parent_revision=1,
+    )
+
+    assert first["status"] == "ok"
+    parent_gates = json.loads(
+        (home / "proposals" / parent_id / "gates.json").read_text(),
+    )
+    assert parent_gates["latest_child_proposal_id"] == first["proposal_id"]
+    assert parent_gates["latest_child_revision"] == 2
+
+    second = proposals_lib.patch_proposal(
+        home,
+        parent_id,
+        {"add_triggers": ["conflicting child"]},
+        expected_parent_revision=1,
+    )
+
+    assert second["status"] == "refused"
+    assert second["reason"] == "revision_conflict"
+    assert second["latest_child_proposal_id"] == first["proposal_id"]
+
+
 def test_benchmark_proposals_reuses_revision_eval_prompts_and_records_report(
     tmp_path: Path,
 ) -> None:

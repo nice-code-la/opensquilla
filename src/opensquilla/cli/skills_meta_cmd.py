@@ -647,6 +647,11 @@ def proposals_cmd(
     patch_file: Path | None = typer.Option(
         None, "--patch-file", help="Path to proposal patch JSON object",
     ),
+    expected_parent_revision: int | None = typer.Option(
+        None,
+        "--expected-parent-revision",
+        help="Refuse patch if the parent proposal revision has moved",
+    ),
     owner: str | None = typer.Option(
         None, "--owner", help="Patch revision owner override",
     ),
@@ -779,6 +784,7 @@ def proposals_cmd(
             _proposals_home(),
             proposal_id or "",
             patch_request,
+            expected_parent_revision=expected_parent_revision,
         )
         if json_out:
             typer.echo(_json.dumps(result))

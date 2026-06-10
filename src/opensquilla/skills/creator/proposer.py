@@ -1031,6 +1031,7 @@ def meta_skill_patch_proposal(
     proposal_id: str,
     patch_json: str,
     home: str = "",
+    expected_parent_revision: int | None = None,
 ) -> str:
     """Create a reviewed revision of an existing pending proposal.
 
@@ -1061,7 +1062,12 @@ def meta_skill_patch_proposal(
             },
             ensure_ascii=False,
         )
-    result = patch_proposal(home_path, proposal_id, patch_request)
+    result = patch_proposal(
+        home_path,
+        proposal_id,
+        patch_request,
+        expected_parent_revision=expected_parent_revision,
+    )
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -1504,6 +1510,7 @@ async def meta_skill_persist_proposal_tool(
     params={
         "proposal_id": {"type": "string"},
         "patch_json": {"type": "string"},
+        "expected_parent_revision": {"type": "integer"},
         "home": {"type": "string"},
     },
     required=["proposal_id", "patch_json"],
@@ -1512,6 +1519,7 @@ async def meta_skill_persist_proposal_tool(
 async def meta_skill_patch_proposal_tool(
     proposal_id: str,
     patch_json: str,
+    expected_parent_revision: int | None = None,
     home: str = "",
 ) -> str:
     import asyncio
@@ -1521,6 +1529,7 @@ async def meta_skill_patch_proposal_tool(
         proposal_id,
         patch_json,
         home,
+        expected_parent_revision,
     )
 
 

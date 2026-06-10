@@ -1007,6 +1007,58 @@ def _parent_revision_number(value: object) -> int:
     raise ValueError("invalid_parent_revision")
 
 
+def _current_proposal_revision(gates: dict) -> int:
+    revision = gates.get("revision")
+    if not isinstance(revision, dict):
+        return 1
+    return _parent_revision_number(revision.get("revision"))
+
+
+def _check_patch_revision_conflict(
+    parent_gates: dict,
+    expected_parent_revision: int | None,
+) -> dict | None:
+    if expected_parent_revision is None:
+        return None
+    current_revision = _current_proposal_revision(parent_gates)
+    latest_child_revision = parent_gates.get("latest_child_revision")
+    latest_child_id = str(parent_gates.get("latest_child_proposal_id") or "")
+    if expected_parent_revision != current_revision:
+        return {
+            "status": "refused",
+            "reason": "revision_conflict",
+            "current_revision": current_revision,
+            "expected_parent_revision": expected_parent_revision,
+            "latest_child_proposal_id": latest_child_id,
+            "latest_child_revision": latest_child_revision,
+        }
+    if isinstance(latest_child_revision, int) and latest_child_revision > current_revision:
+        return {
+            "status": "refused",
+            "reason": "revision_conflict",
+            "current_revision": current_revision,
+            "expected_parent_revision": expected_parent_revision,
+            "latest_child_proposal_id": latest_child_id,
+            "latest_child_revision": latest_child_revision,
+        }
+    return None
+
+
+def _record_latest_child_revision(
+    parent_dir: Path,
+    parent_gates: dict,
+    *,
+    child_id: str,
+    revision_number: int,
+) -> None:
+    parent_gates["latest_child_proposal_id"] = child_id
+    parent_gates["latest_child_revision"] = revision_number
+    (parent_dir / "gates.json").write_text(
+        json.dumps(parent_gates, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def _lint_revised_skill(skill_md: str) -> dict:
     try:
         proc = subprocess.run(
@@ -1038,7 +1090,13 @@ def _lint_revised_skill(skill_md: str) -> dict:
     return lint_payload
 
 
-def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
+def patch_proposal(
+    home: Path,
+    proposal_id: str,
+    patch_request: dict,
+    *,
+    expected_parent_revision: int | None = None,
+) -> dict:
     """Create a revised pending proposal from an allowlisted structured patch."""
     if not is_valid_proposal_id(proposal_id):
         return {"status": "error", "reason": "invalid proposal_id format"}
@@ -1064,6 +1122,15 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
         except (json.JSONDecodeError, OSError):
             parent_gates = {}
     bundle_files = _read_bundle_files(parent_dir)
+    try:
+        conflict = _check_patch_revision_conflict(
+            parent_gates,
+            expected_parent_revision,
+        )
+    except ValueError as exc:
+        return {"status": "refused", "reason": str(exc)}
+    if conflict is not None:
+        return conflict
 
     try:
         frontmatter, body = _split_skill_markdown(parent_skill_md)
@@ -1101,6 +1168,12 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
         revised_skill_md,
         gates,
         bundle_files=bundle_files,
+    )
+    _record_latest_child_revision(
+        parent_dir,
+        parent_gates,
+        child_id=child_id,
+        revision_number=revision["revision"],
     )
     return {
         "status": "ok",

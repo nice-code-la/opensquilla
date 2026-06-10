@@ -38,6 +38,16 @@ def _bool_arg(value: object) -> bool:
     raise argparse.ArgumentTypeError("expected boolean")
 
 
+def _optional_int_arg(value: object) -> int | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected integer") from exc
+
+
 def cmd_write_proposal(args: argparse.Namespace) -> dict:
     skill_md = (
         args.skill_md_inline
@@ -120,6 +130,7 @@ def cmd_patch(args: argparse.Namespace) -> dict:
         Path(args.home),
         args.proposal_id,
         patch_request,
+        expected_parent_revision=args.expected_parent_revision,
     )
 
 
@@ -201,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--migration-notes", default=None)
     p.add_argument("--patch-json", default=None)
     p.add_argument("--patch-file", default=None)
+    p.add_argument("--expected-parent-revision", type=_optional_int_arg, default=None)
     p.add_argument("--owner", default=None)
     p.add_argument("--candidate-proposal-id", default=None)
     p.add_argument("--eval-prompts", default=None)

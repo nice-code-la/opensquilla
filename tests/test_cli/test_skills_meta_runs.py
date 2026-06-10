@@ -291,6 +291,8 @@ composition:
             proposal_id,
             "--patch-json",
             json.dumps({"set_description": "Patched from CLI"}),
+            "--expected-parent-revision",
+            "1",
             "--owner",
             "cli-test",
             "--json",
@@ -312,6 +314,11 @@ composition:
     child_gates = json.loads((tmp_path / "proposals" / child_id / "gates.json").read_text())
     assert child_gates["revision"]["parent_proposal_id"] == proposal_id
     assert child_gates["revision"]["owner"] == "cli-test"
+    parent_gates = json.loads(
+        (tmp_path / "proposals" / proposal_id / "gates.json").read_text(),
+    )
+    assert parent_gates["latest_child_proposal_id"] == child_id
+    assert parent_gates["latest_child_revision"] == 2
     assert (
         tmp_path / "proposals" / proposal_id / "SKILL.md"
     ).read_text(encoding="utf-8") == parent_skill_md

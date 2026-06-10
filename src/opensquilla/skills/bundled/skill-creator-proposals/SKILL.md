@@ -42,6 +42,8 @@ entrypoint:
     - "{{ with.patch_json | default('') }}"
     - --patch-file
     - "{{ with.patch_file | default('') }}"
+    - --expected-parent-revision
+    - "{{ with.expected_parent_revision | default('') }}"
     - --owner
     - "{{ with.owner | default('') }}"
     - --collision-result
@@ -71,7 +73,7 @@ CRUD for meta-skill proposal candidates at `~/.opensquilla/proposals/<id>/`.
 - `write_proposal --skill-md path --lint-result json --smoke-result json [--creator-mode FULL_GATED --acceptance-result text --runtime-e2e-result json --bundle-files-json object]` — atomic write to `~/.opensquilla/proposals/<uuid8>/{SKILL.md,gates.json}` plus optional bundle files such as `scripts/*.py`, `evals/*.json`, or `references/*.md`. Returns `{proposal_id, auto_enable_eligible}`. In `FULL_GATED` mode runtime E2E must show the meta-skill route wins or ties against the no-meta highest-tier baseline with no regressions.
 - `list` — enumerate proposals with their eligibility flag and bundle summary
 - `show --proposal-id <id>` — return a proposal's `SKILL.md`, gate payload, and optional bundle manifest/files
-- `patch --proposal-id <id> (--patch-json json | --patch-file path) [--owner owner]` — apply an allowlisted structured patch to a pending proposal and write a child revision with stale gates
+- `patch --proposal-id <id> (--patch-json json | --patch-file path) [--expected-parent-revision n] [--owner owner]` — apply an allowlisted structured patch to a pending proposal and write a child revision with stale gates. When `--expected-parent-revision` is supplied, refuse if the parent already has a newer child revision.
 - `refresh --proposal-id <id> [--smoke-result json --collision-result text --risk-result text --generation-quality-result json --activation-result json --acceptance-result json --runtime-e2e-result json]` — refresh stale gates on a pending revision and recompute eligibility
 - `benchmark --proposal-id <baseline-id> --candidate-proposal-id <candidate-id> [--eval-prompts json --comparison-result json]` — record a non-promoting A/B report under `~/.opensquilla/proposal-benchmarks/<uuid8>/benchmark.json`, reusing proposal `eval_prompts` when explicit prompts are omitted
 - `accept --proposal-id <id> [--force] [--replace --owner owner --deprecates name[,name] --migration-notes text]` — move proposal to `~/.opensquilla/skills/<name>/` so it gets loaded by MANAGED layer; refuses if any gate failed (unless `--force`). `--replace` archives the existing managed skill and records `lifecycle.supersedes`, deprecation metadata, migration notes, and a rollback target.
