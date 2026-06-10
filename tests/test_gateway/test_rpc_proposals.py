@@ -127,6 +127,25 @@ async def test_list_returns_proposal_rows(_isolated_home: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_audit_returns_drift_issues(_isolated_home: Path) -> None:
+    from opensquilla.gateway.rpc_proposals import _handle_audit
+
+    pid = _seed(_isolated_home)
+    gates_path = _isolated_home / "proposals" / pid / "gates.json"
+    import json
+    gates = json.loads(gates_path.read_text())
+    gates["smoke"] = {"passed": True, "stale": True}
+    gates_path.write_text(json.dumps(gates))
+
+    out = await _handle_audit(None, _make_ctx())
+
+    assert out["status"] == "ok"
+    assert out["counts"]["stale_proposals"] == 1
+    assert out["issues"][0]["type"] == "stale_proposal"
+    assert out["issues"][0]["proposal_id"] == pid
+
+
+@pytest.mark.asyncio
 async def test_show_happy_path(_isolated_home: Path) -> None:
     from opensquilla.gateway.rpc_proposals import _handle_show
 

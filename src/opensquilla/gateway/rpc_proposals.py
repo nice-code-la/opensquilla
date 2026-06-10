@@ -77,6 +77,13 @@ async def _handle_list(
     return proposals_lib.list_proposals(_home())
 
 
+@_d.method("exec.proposals.audit", scope="operator.proposals")
+async def _handle_audit(
+    params: dict | None, ctx: RpcContext,
+) -> dict[str, Any]:
+    return proposals_lib.audit_proposal_drift(_home())
+
+
 @_d.method("exec.proposals.show", scope="operator.proposals")
 async def _handle_show(
     params: dict | None, ctx: RpcContext,

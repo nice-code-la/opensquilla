@@ -174,6 +174,7 @@ METHOD_SCOPES: dict[str, str] = {
     # admin prefix so that proposal browsing can remain operator-visible.
     "exec.proposals.pending_count": PROPOSALS_SCOPE,
     "exec.proposals.list": PROPOSALS_SCOPE,
+    "exec.proposals.audit": PROPOSALS_SCOPE,
     "exec.proposals.show": PROPOSALS_SCOPE,
     "exec.proposals.settings.get": PROPOSALS_SCOPE,
     "exec.proposals.auto_enabled.list": PROPOSALS_SCOPE,
