@@ -379,6 +379,32 @@ def test_creator_final_response_includes_persist_status() -> None:
     assert "Saved proposal status" in final_text
 
 
+def test_creator_route_guards_accept_json_clarify_output() -> None:
+    """Live models sometimes obey the schema as JSON; keep the DAG moving."""
+    from opensquilla.skills.loader import SkillLoader
+    from opensquilla.skills.meta.templating import evaluate_when
+
+    spec = SkillLoader(bundled_dir=BUNDLED).get_by_name("meta-skill-creator")
+    assert spec is not None
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    json_clarify = (
+        '{\n'
+        '  "ROUTE": "meta-skill",\n'
+        '  "WORKFLOW_GOAL": "Create a bundled meta-skill",\n'
+        '  "NEEDS_CLARIFICATION": "no"\n'
+        '}'
+    )
+
+    assert evaluate_when(
+        steps["creator_mode"].when,
+        inputs={},
+        outputs={"clarify_intent": json_clarify},
+    ) is True
+
+
 def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
     loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
     loader.invalidate_cache()

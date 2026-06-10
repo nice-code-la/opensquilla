@@ -62,6 +62,7 @@ def test_live_meta_skill_creator_script_runs_full_flow_with_stub_llm(
     assert out["lint"]["G2"]["passed"] is True
     assert out["smoke"]["G3"]["passed"] is True
     assert out["smoke"]["G4"]["passed"] is True
-    assert out["persist"]["auto_enable"]["status"] == "enabled"
-    assert out["managed"] == ["script-history-summary"]
-    assert out["pending"] == []
+    assert out["persist"]["auto_enable"]["status"] == "skipped"
+    assert out["persist"]["auto_enable"]["reason"] == "gates_not_eligible"
+    assert out["managed"] == []
+    assert out["pending"] == [out["persist"]["proposal_id"]]

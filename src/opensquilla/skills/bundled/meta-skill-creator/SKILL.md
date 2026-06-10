@@ -179,7 +179,7 @@ composition:
       label_en: "Creation clarification"
       kind: user_input
       depends_on: [clarify_intent]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and 'needs_clarification: yes' in (outputs.clarify_intent | lower)"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and ('needs_clarification: yes' in (outputs.clarify_intent | lower) or '\"needs_clarification\": \"yes\"' in (outputs.clarify_intent | lower))"
       clarify:
         mode: form
         intro: |
@@ -222,7 +222,7 @@ composition:
       label_en: "Regular skill exit"
       kind: tool_call
       depends_on: [clarify_intent]
-      when: "'route: normal-skill' in (outputs.clarify_intent | lower)"
+      when: "('route: normal-skill' in (outputs.clarify_intent | lower) or '\"route\": \"normal-skill\"' in (outputs.clarify_intent | lower))"
       tool: emit_text
       tool_args:
         text: |
@@ -235,7 +235,7 @@ composition:
       label_en: "Creation mode"
       kind: llm_classify
       depends_on: [clarify_intent, creator_clarify]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower)"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower))"
       output_choices:
         - PREVIEW_ONLY
         - PERSISTED_PROPOSAL
@@ -281,7 +281,7 @@ composition:
       label_en: "Build patch request"
       kind: llm_chat
       depends_on: [creator_mode]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'PATCH_PROPOSAL'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'PATCH_PROPOSAL'"
       with:
         system: |
           You convert a natural-language proposal edit request into a compact
@@ -322,7 +322,7 @@ composition:
       label_en: "Extract patch target"
       kind: tool_call
       depends_on: [creator_mode]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'PATCH_PROPOSAL'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'PATCH_PROPOSAL'"
       tool: meta_skill_extract_proposal_id
       tool_args:
         text: |
@@ -336,7 +336,7 @@ composition:
       label_en: "Patch proposal"
       kind: tool_call
       depends_on: [extract_patch_target, build_patch_request]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'PATCH_PROPOSAL'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'PATCH_PROPOSAL'"
       tool: meta_skill_patch_proposal
       tool_args:
         proposal_id: "{{ outputs.extract_patch_target }}"
@@ -348,7 +348,7 @@ composition:
       label_en: "Extract benchmark targets"
       kind: tool_call
       depends_on: [creator_mode]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'BENCHMARK'"
       tool: meta_skill_extract_benchmark_proposal_ids
       tool_args:
         text: |
@@ -363,7 +363,7 @@ composition:
       label_en: "Benchmark proposals"
       kind: tool_call
       depends_on: [extract_benchmark_targets]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'BENCHMARK'"
       tool: meta_skill_benchmark_proposals
       tool_args:
         target_json: "{{ outputs.extract_benchmark_targets }}"
@@ -376,7 +376,7 @@ composition:
       label_en: "Learning summary"
       kind: tool_call
       depends_on: [creator_mode]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_creator_learning_summary
       tool_args:
         home: "{{ inputs.home | default('') }}"
@@ -387,7 +387,7 @@ composition:
       kind: skill_exec
       skill: history-explorer
       depends_on: [clarify_intent, creator_clarify, creator_mode]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK' and 'Unattended meta-skill auto-propose run' in inputs.get('system_prompt', '')"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK' and 'Unattended meta-skill auto-propose run' in inputs.get('system_prompt', '')"
       on_failure: harvest_empty
       with:
         query: |
@@ -410,7 +410,7 @@ composition:
       label_en: "Mode selection"
       kind: llm_classify
       depends_on: [creator_mode, harvest]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       output_choices: [p1_sequential, p2_fan_out_merge, p3_condition_gated]
       with:
         history_summary: "{{ outputs.harvest | truncate(2000) }}"
@@ -429,7 +429,7 @@ composition:
       label_en: "Fill slots"
       kind: tool_call
       depends_on: [pick_pattern, learning_summary]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_fill_slots
       tool_args:
         pattern_id: "{{ outputs.pick_pattern }}"
@@ -459,7 +459,7 @@ composition:
       label_en: "Assembly"
       kind: tool_call
       depends_on: [fill_slots]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_assemble
       tool_args:
         pattern_id: "{{ outputs.pick_pattern }}"
@@ -470,7 +470,7 @@ composition:
       label_en: "Generation quality"
       kind: tool_call
       depends_on: [fill_slots]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_generation_quality_run
       tool_args:
         pattern_id: "{{ outputs.pick_pattern }}"
@@ -481,7 +481,7 @@ composition:
       label_en: "Activation evaluation"
       kind: tool_call
       depends_on: [assemble]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_activation_eval_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -493,7 +493,7 @@ composition:
       label_en: "Bundle assets"
       kind: llm_chat
       depends_on: [assemble, generation_quality]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       with:
         system: |
           You decide whether the generated meta-skill should be delivered as a
@@ -533,7 +533,7 @@ composition:
       label_en: "Conflict check"
       kind: llm_chat
       depends_on: [assemble]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       with:
         system: |
           You are a trigger-collision reviewer for meta-skill-creator. Use only
@@ -553,7 +553,7 @@ composition:
       label_en: "Lint check"
       kind: tool_call
       depends_on: [collision_check]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_lint_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -564,7 +564,7 @@ composition:
       label_en: "Risk classification"
       kind: llm_chat
       depends_on: [lint]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       with:
         system: |
           You are an operational-risk classifier for generated meta-skills. Use
@@ -591,7 +591,7 @@ composition:
       label_en: "Single-mode baseline"
       kind: llm_chat
       depends_on: [creator_mode]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'FULL_GATED'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'FULL_GATED'"
       with:
         system: |
           You are the highest-tier baseline model for meta-skill authoring.
@@ -636,7 +636,7 @@ composition:
       label_en: "Acceptance comparison"
       kind: llm_chat
       depends_on: [assemble, single_model_baseline, generation_quality, activation_eval]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'FULL_GATED'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'FULL_GATED'"
       with:
         system: |
           You are an acceptance reviewer. Compare an orchestrated candidate
@@ -694,7 +694,7 @@ composition:
       label_en: "Smoke test"
       kind: tool_call
       depends_on: [risk_classify]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY' and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PREVIEW_ONLY' and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_smoke_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -706,7 +706,7 @@ composition:
       label_en: "Runtime E2E"
       kind: tool_call
       depends_on: [assemble, smoke]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode == 'FULL_GATED'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode == 'FULL_GATED'"
       tool: meta_skill_runtime_e2e_run
       tool_args:
         skill_md: "{{ outputs.assemble }}"
@@ -721,7 +721,7 @@ composition:
       label_en: "Preview"
       kind: llm_chat
       depends_on: [smoke, acceptance_compare, runtime_e2e, generation_quality, activation_eval, bundle_assets]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       with:
         system: |
           You are the final preview writer for meta-skill-creator. Produce only
@@ -773,7 +773,7 @@ composition:
       label_en: "Save"
       kind: tool_call
       depends_on: [preview, assemble, generation_quality, activation_eval, bundle_assets]
-      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY' and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      when: "('route: meta-skill' in (outputs.clarify_intent | lower) or '\"route\": \"meta-skill\"' in (outputs.clarify_intent | lower)) and outputs.creator_mode != 'PREVIEW_ONLY' and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_persist_proposal
       tool_args:
         skill_md: "{{ outputs.assemble }}"
