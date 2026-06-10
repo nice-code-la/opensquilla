@@ -852,6 +852,14 @@
   flex-wrap: wrap;
 }
 
+.sk-proposal-row__lifecycle {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding-inline: 6px;
+  border-inline: 1px solid var(--border);
+}
+
 .sk-prop-chip {
   font-size: 11px;
   padding: 2px 8px;
@@ -902,6 +910,12 @@
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 8px;
+}
+
+.sk-command-hint p {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* Proposal SKILL.md dialog */

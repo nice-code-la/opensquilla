@@ -216,6 +216,14 @@ const SkillsView = (() => {
       }
       const propShow = e.target.closest('[data-proposal-show]');
       if (propShow) { _showProposal(propShow.dataset.proposalShow); return; }
+      const propHint = e.target.closest('[data-proposal-hint]');
+      if (propHint) {
+        _showProposalCommandHint(
+          propHint.dataset.proposalHint,
+          propHint.dataset.proposalAction || 'refresh',
+        );
+        return;
+      }
       const apToggle = e.target.closest('[data-ap-toggle]');
       if (apToggle) {
         // Fires on the checkbox click; the new checked state is already
@@ -603,6 +611,11 @@ const SkillsView = (() => {
       </div>
       <div class="sk-proposal-row__actions">
         <button class="btn btn--ghost btn--sm" data-proposal-show="${pid}" type="button">Show</button>
+        <span class="sk-proposal-row__lifecycle" aria-label="Proposal lifecycle commands">
+          <button class="btn btn--ghost btn--sm" data-proposal-hint="${pid}" data-proposal-action="refresh" type="button">Refresh</button>
+          <button class="btn btn--ghost btn--sm" data-proposal-hint="${pid}" data-proposal-action="patch" type="button">Patch</button>
+          <button class="btn btn--ghost btn--sm" data-proposal-hint="${pid}" data-proposal-action="benchmark" type="button">Benchmark</button>
+        </span>
         <button class="btn btn--primary btn--sm" data-proposal-accept="${pid}" type="button">Accept</button>
         <button class="btn btn--ghost btn--sm" data-proposal-reject="${pid}" type="button">Reject</button>
       </div>
@@ -764,6 +777,49 @@ const SkillsView = (() => {
       <pre class="sk-detail__pre">${_esc(dryRun.sample)}</pre>
       <div class="sk-dry-run__triggers">${triggerList}</div>
     </section>`;
+  }
+
+  function _proposalLifecycleCommand(proposalId, action) {
+    const pid = String(proposalId || '').trim();
+    if (action === 'patch') return `opensquilla skills meta proposals patch ${pid}`;
+    if (action === 'benchmark') return `opensquilla skills meta proposals benchmark ${pid}`;
+    return `opensquilla skills meta proposals refresh ${pid}`;
+  }
+
+  function _showProposalCommandHint(proposalId, action) {
+    const dlg = _el && _el.querySelector('#skill-detail-dialog');
+    const body = _el && _el.querySelector('#skill-detail-body');
+    if (!dlg || !body) return;
+    const label = action === 'patch'
+      ? 'Patch proposal'
+      : action === 'benchmark'
+        ? 'Benchmark proposal'
+        : 'Refresh proposal';
+    const description = action === 'patch'
+      ? 'Create a child revision after editing the generated SKILL.md or gates.'
+      : action === 'benchmark'
+        ? 'Run the proposal against sample prompts before accepting it.'
+        : 'Regenerate or re-check proposal metadata before review.';
+    const command = _proposalLifecycleCommand(proposalId, action);
+    body.innerHTML = `<div class="sk-detail">
+      <header class="sk-detail__header">
+        <h3>${_esc(label)}</h3>
+        <button class="btn btn--ghost btn--sm" data-dialog-close type="button">Close</button>
+      </header>
+      <section class="sk-detail__section sk-command-hint">
+        <h4>Command</h4>
+        <p>${_esc(description)}</p>
+        <pre class="sk-detail__pre">${_esc(command)}</pre>
+      </section>
+      <section class="sk-detail__section">
+        <h4>Proposal</h4>
+        <pre class="sk-detail__pre">${_esc(proposalId || '')}</pre>
+      </section>
+    </div>`;
+    const closeBtn = body.querySelector('[data-dialog-close]');
+    if (closeBtn) closeBtn.addEventListener('click', () => _closeSkillDialog(dlg));
+    if (typeof dlg.showModal === 'function') dlg.showModal();
+    else dlg.setAttribute('open', '');
   }
 
   async function _acceptProposal(proposalId) {

@@ -126,3 +126,19 @@ def test_skill_proposal_detail_includes_dry_run_sample_prompt() -> None:
     assert "Use this sample prompt to test routing after acceptance." in source
     assert "${_renderProposalDryRun(data.skill_md || '')}" in source
     assert ".sk-dry-run" in css
+
+
+def test_skill_proposal_rows_offer_lifecycle_command_hints() -> None:
+    source = SKILLS_JS.read_text(encoding="utf-8")
+    css = SKILLS_CSS.read_text(encoding="utf-8")
+
+    assert "const propHint = e.target.closest('[data-proposal-hint]');" in source
+    assert "function _showProposalCommandHint(proposalId, action)" in source
+    assert "function _proposalLifecycleCommand(proposalId, action)" in source
+    assert 'data-proposal-hint="${pid}" data-proposal-action="refresh"' in source
+    assert 'data-proposal-hint="${pid}" data-proposal-action="patch"' in source
+    assert 'data-proposal-hint="${pid}" data-proposal-action="benchmark"' in source
+    assert "opensquilla skills meta proposals refresh" in source
+    assert "opensquilla skills meta proposals patch" in source
+    assert "opensquilla skills meta proposals benchmark" in source
+    assert ".sk-proposal-row__lifecycle" in css
