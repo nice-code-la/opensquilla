@@ -190,6 +190,42 @@ def test_patch_action_creates_revision(tmp_path: Path) -> None:
     assert (home / "proposals" / child_id / "SKILL.md").is_file()
 
 
+def test_refresh_action_updates_patch_revision_gates(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    parent = _run(
+        "write_proposal", home=home,
+        skill_md_inline=SAMPLE_SKILL_MD,
+        lint_result=json.dumps({"G1": {"passed": True}, "G2": {"passed": True}}),
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+    )
+    patched = _run(
+        "patch",
+        home=home,
+        proposal_id=parent["proposal_id"],
+        patch_json=json.dumps({"add_triggers": ["refresh script trigger"]}),
+    )
+
+    out = _run(
+        "refresh",
+        home=home,
+        proposal_id=patched["proposal_id"],
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+        collision_result="PASS: refreshed collision",
+        risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        generation_quality_result=json.dumps({"passed": True}),
+        activation_result=json.dumps({"passed": True}),
+    )
+
+    assert out["status"] == "ok"
+    assert "smoke" in out["refreshed"]
+    assert "collision_check" in out["refreshed"]
+    gates = json.loads(
+        (home / "proposals" / patched["proposal_id"] / "gates.json").read_text(),
+    )
+    assert gates["collision_check"]["passed"] is True
+    assert gates["collision_check"].get("stale") is not True
+
+
 def test_benchmark_action_records_report(tmp_path: Path) -> None:
     home = tmp_path / ".opensquilla"
     baseline = _run(

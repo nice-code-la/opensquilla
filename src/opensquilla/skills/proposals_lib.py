@@ -345,7 +345,7 @@ def _evaluate_acceptance_compare(
 
 def _evaluate_collision_check(creator_mode: str, collision_result: object) -> dict:
     mode = (creator_mode or "").strip().upper()
-    required = mode in {"FULL_GATED", "PERSISTED_PROPOSAL"}
+    required = mode in {"FULL_GATED", "PERSISTED_PROPOSAL", "PATCH_PROPOSAL"}
     raw = str(collision_result or "").strip()
     lowered = raw.lower()
     failed = "revise_needed" in lowered or "fail" in lowered
@@ -361,7 +361,7 @@ def _evaluate_collision_check(creator_mode: str, collision_result: object) -> di
 
 def _evaluate_risk_classify(creator_mode: str, risk_result: object) -> dict:
     mode = (creator_mode or "").strip().upper()
-    required = mode in {"FULL_GATED", "PERSISTED_PROPOSAL"}
+    required = mode in {"FULL_GATED", "PERSISTED_PROPOSAL", "PATCH_PROPOSAL"}
     raw = str(risk_result or "").strip()
     match = re.search(r"^RISK:\s*(low|medium|high)\b", raw, re.MULTILINE | re.IGNORECASE)
     risk_level = match.group(1).lower() if match else ""
@@ -495,6 +495,54 @@ def _contains_stale_gate(gates: dict) -> bool:
         if isinstance(value, dict) and value.get("stale") is True:
             return True
     return False
+
+
+def _clear_optional_stale_gates(gates: dict) -> None:
+    for name in _PATCH_STALE_GATES:
+        gate = gates.get(name)
+        if (
+            isinstance(gate, dict)
+            and gate.get("stale") is True
+            and gate.get("required") is False
+        ):
+            gates[name] = {
+                "required": False,
+                "passed": True,
+                "reason": "not_required",
+                "previous_passed": gate.get("previous_passed", False),
+            }
+
+
+def _proposal_gate_passed(gates: dict, name: str) -> bool:
+    gate = gates.get(name)
+    if name == "smoke":
+        return _gate_previous_passed(gate) is True and not (
+            isinstance(gate, dict) and gate.get("degraded") is True
+        )
+    return isinstance(gate, dict) and gate.get("passed") is True
+
+
+def _recompute_auto_enable_eligible(gates: dict) -> bool:
+    lint = gates.get("lint")
+    lint_passed = (
+        isinstance(lint, dict)
+        and lint.get("G1", {}).get("passed") is True
+        and lint.get("G2", {}).get("passed") is True
+    )
+    gate_names = (
+        "smoke",
+        "collision_check",
+        "risk_classify",
+        "acceptance_compare",
+        "runtime_e2e",
+        "generation_quality",
+        "activation_eval",
+    )
+    return (
+        lint_passed
+        and not _contains_stale_gate(gates)
+        and all(_proposal_gate_passed(gates, name) for name in gate_names)
+    )
 
 
 def _evaluate_runtime_e2e(
@@ -1059,6 +1107,97 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
         "proposal_id": child_id,
         "parent_proposal_id": proposal_id,
         "auto_enable_eligible": False,
+    }
+
+
+def refresh_proposal_gates(
+    home: Path,
+    proposal_id: str,
+    *,
+    smoke_result: object = None,
+    collision_result: object = None,
+    risk_result: object = None,
+    acceptance_result: object = None,
+    runtime_e2e_result: object = None,
+    generation_quality_result: object = None,
+    activation_result: object = None,
+) -> dict:
+    """Refresh stale gates on a pending proposal revision."""
+    if not is_valid_proposal_id(proposal_id):
+        return {"status": "error", "reason": "invalid proposal_id format"}
+    proposal_dir = proposals_dir(home) / proposal_id
+    if not (proposal_dir / "SKILL.md").is_file():
+        return {"status": "error", "reason": f"proposal {proposal_id} not found"}
+    gates = _read_gates(proposal_dir / "gates.json")
+    creator_mode = str(gates.get("creator_mode") or "PATCH_PROPOSAL")
+    refreshed: list[str] = []
+
+    if smoke_result is not None:
+        smoke_gate = _normalise_gate_payload(
+            smoke_result,
+            required=True,
+            missing_reason="missing_smoke_result",
+        )
+        if isinstance(smoke_result, dict) and any(
+            isinstance(value, dict) and "passed" in value
+            for value in smoke_result.values()
+        ):
+            smoke_gate = dict(smoke_result)
+        gates["smoke"] = smoke_gate
+        refreshed.append("smoke")
+    if collision_result is not None:
+        gates["collision_check"] = _evaluate_collision_check(
+            "PATCH_PROPOSAL",
+            collision_result,
+        )
+        refreshed.append("collision_check")
+    if risk_result is not None:
+        gates["risk_classify"] = _evaluate_risk_classify("PATCH_PROPOSAL", risk_result)
+        refreshed.append("risk_classify")
+    if acceptance_result is not None:
+        existing = gates.get("acceptance_compare")
+        mode = "FULL_GATED" if (
+            isinstance(existing, dict) and existing.get("required") is True
+        ) else creator_mode
+        gates["acceptance_compare"] = _evaluate_acceptance_compare(
+            mode,
+            acceptance_result,
+        )
+        refreshed.append("acceptance_compare")
+    if runtime_e2e_result is not None:
+        existing = gates.get("runtime_e2e")
+        mode = "FULL_GATED" if (
+            isinstance(existing, dict) and existing.get("required") is True
+        ) else creator_mode
+        gates["runtime_e2e"] = _evaluate_runtime_e2e(mode, runtime_e2e_result)
+        refreshed.append("runtime_e2e")
+    if generation_quality_result is not None:
+        gates["generation_quality"] = _normalise_gate_payload(
+            generation_quality_result,
+            required=True,
+            missing_reason="missing_generation_quality_result",
+        )
+        refreshed.append("generation_quality")
+    if activation_result is not None:
+        gates["activation_eval"] = _normalise_gate_payload(
+            activation_result,
+            required=True,
+            missing_reason="missing_activation_result",
+        )
+        refreshed.append("activation_eval")
+
+    _clear_optional_stale_gates(gates)
+    gates["auto_enable_eligible"] = _recompute_auto_enable_eligible(gates)
+    (proposal_dir / "gates.json").write_text(
+        json.dumps(gates, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {
+        "status": "ok",
+        "proposal_id": proposal_id,
+        "auto_enable_eligible": gates["auto_enable_eligible"],
+        "refreshed": refreshed,
+        "gates": gates,
     }
 
 
@@ -1645,6 +1784,7 @@ __all__ = [
     "pending_count",
     "proposals_dir",
     "read_auto_propose_settings",
+    "refresh_proposal_gates",
     "reject_proposal",
     "rollback_dir",
     "rollback_skill",

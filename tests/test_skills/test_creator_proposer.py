@@ -117,6 +117,9 @@ def test_creator_package_import_registers_tools() -> None:
     )
     assert "meta_skill_fill_slots" in names, "meta_skill_fill_slots not registered"
     assert "meta_skill_patch_proposal" in names, "meta_skill_patch_proposal not registered"
+    assert "meta_skill_refresh_proposal_gates" in names, (
+        "meta_skill_refresh_proposal_gates not registered"
+    )
     assert "meta_skill_extract_proposal_id" in names, (
         "meta_skill_extract_proposal_id not registered"
     )
@@ -203,6 +206,7 @@ def test_creator_tools_hidden_from_owner_default() -> None:
     assert "meta_skill_assemble" in registered_names
     assert "meta_skill_fill_slots" in registered_names
     assert "meta_skill_patch_proposal" in registered_names
+    assert "meta_skill_refresh_proposal_gates" in registered_names
     assert "meta_skill_extract_proposal_id" in registered_names
     assert "meta_skill_benchmark_proposals" in registered_names
     assert "meta_skill_extract_benchmark_proposal_ids" in registered_names
@@ -360,6 +364,9 @@ def test_creator_tools_registered_via_meta_invoke_module_import() -> None:
     )
     assert "meta_skill_patch_proposal" in names, (
         "N10: meta_skill_patch_proposal not registered via soft-path import"
+    )
+    assert "meta_skill_refresh_proposal_gates" in names, (
+        "N10: meta_skill_refresh_proposal_gates not registered via soft-path import"
     )
     assert "meta_skill_extract_proposal_id" in names, (
         "N10: meta_skill_extract_proposal_id not registered via soft-path import"
@@ -1016,6 +1023,56 @@ composition:
     gates = json.loads((child_dir / "gates.json").read_text(encoding="utf-8"))
     assert gates["creator_mode"] == "PATCH_PROPOSAL"
     assert gates["revision"]["owner"] == "test-operator"
+
+
+def test_refresh_proposal_tool_wrapper_updates_revision_gates(tmp_path) -> None:
+    from opensquilla.skills import proposals_lib
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / ".opensquilla"
+    skill_md = """---
+name: synth-wrapper-refresh
+description: "Wrapper refresh test meta-skill."
+kind: meta
+meta_priority: 50
+triggers:
+  - "wrapper refresh"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+"""
+    parent = proposals_lib.write_proposal(
+        home,
+        skill_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    patched = proposals_lib.patch_proposal(
+        home,
+        parent["proposal_id"],
+        {"add_triggers": ["wrapper refreshed trigger"]},
+    )
+
+    out = json.loads(proposer.meta_skill_refresh_proposal_gates(
+        proposal_id=patched["proposal_id"],
+        smoke_json=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+        collision_result="PASS: wrapper refreshed collision",
+        risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        generation_quality_json=json.dumps({"passed": True}),
+        activation_json=json.dumps({"passed": True}),
+        home=str(home),
+    ))
+
+    assert out["status"] == "ok"
+    assert "collision_check" in out["refreshed"]
+    gates = json.loads(
+        (home / "proposals" / patched["proposal_id"] / "gates.json").read_text(),
+    )
+    assert gates["collision_check"]["passed"] is True
 
 
 def test_extract_proposal_id_prefers_explicit_fallback() -> None:

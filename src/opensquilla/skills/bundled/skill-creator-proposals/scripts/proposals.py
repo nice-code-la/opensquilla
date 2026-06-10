@@ -140,6 +140,27 @@ def cmd_benchmark(args: argparse.Namespace) -> dict:
     )
 
 
+def cmd_refresh(args: argparse.Namespace) -> dict:
+    return proposals_lib.refresh_proposal_gates(
+        Path(args.home),
+        args.proposal_id,
+        smoke_result=_load_json_arg(args.smoke_result, "--smoke-result"),
+        collision_result=args.collision_result or None,
+        risk_result=args.risk_result or None,
+        acceptance_result=_load_json_arg(args.acceptance_result, "--acceptance-result")
+        or None,
+        runtime_e2e_result=_load_json_arg(
+            args.runtime_e2e_result,
+            "--runtime-e2e-result",
+        ),
+        generation_quality_result=_load_json_arg(
+            args.generation_quality_result,
+            "--generation-quality-result",
+        ),
+        activation_result=_load_json_arg(args.activation_result, "--activation-result"),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -147,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         choices=[
             "write_proposal", "list", "show", "accept", "reject",
-            "pending_count", "patch", "benchmark", "rollback",
+            "pending_count", "patch", "refresh", "benchmark", "rollback",
         ],
     )
     p.add_argument(
@@ -191,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
         "rollback": cmd_rollback,
         "pending_count": cmd_pending_count,
         "patch": cmd_patch,
+        "refresh": cmd_refresh,
         "benchmark": cmd_benchmark,
     }
     try:

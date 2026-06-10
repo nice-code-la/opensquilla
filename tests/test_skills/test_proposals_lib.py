@@ -765,6 +765,92 @@ def test_accept_refuses_patch_revision_with_stale_gates_even_if_marked_eligible(
     assert accepted["gates"]["acceptance_compare"]["stale"] is True
 
 
+def test_refresh_proposal_gates_clears_patch_stale_gates(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    parent = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        creator_mode="FULL_GATED",
+        acceptance_result={"winner": "orchestrated", "required_improvements": "none"},
+        runtime_e2e_result={"passed": True, "winner": "meta", "cases": []},
+        collision_result="PASS: no trigger collision",
+        risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        generation_quality_result={"passed": True},
+        activation_result={"passed": True},
+    )
+    child = proposals_lib.patch_proposal(
+        home,
+        parent["proposal_id"],
+        {"set_description": "Refreshed patch proposal gate test."},
+    )
+    child_id = child["proposal_id"]
+    child_gates_path = home / "proposals" / child_id / "gates.json"
+    child_gates = json.loads(child_gates_path.read_text())
+    child_gates["lint"] = GATES_PASSING
+    child_gates_path.write_text(json.dumps(child_gates))
+
+    refreshed = proposals_lib.refresh_proposal_gates(
+        home,
+        child_id,
+        smoke_result=SMOKE_PASSING,
+        collision_result="PASS: refreshed collision check",
+        risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        acceptance_result={"winner": "orchestrated", "required_improvements": "none"},
+        runtime_e2e_result={"passed": True, "winner": "meta", "cases": []},
+        generation_quality_result={"passed": True},
+        activation_result={"passed": True},
+    )
+
+    assert refreshed["status"] == "ok"
+    assert refreshed["auto_enable_eligible"] is True
+    assert sorted(refreshed["refreshed"]) == [
+        "acceptance_compare",
+        "activation_eval",
+        "collision_check",
+        "generation_quality",
+        "risk_classify",
+        "runtime_e2e",
+        "smoke",
+    ]
+    shown = proposals_lib.show_proposal(home, child_id)
+    assert all(
+        not (isinstance(value, dict) and value.get("stale") is True)
+        for value in shown["gates"].values()
+    )
+    accepted = proposals_lib.accept_proposal(home, child_id)
+    assert accepted["status"] == "ok"
+
+
+def test_refresh_proposal_gates_preserves_failed_gate_block(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    parent_id = _seed_proposal(home)
+    child = proposals_lib.patch_proposal(
+        home,
+        parent_id,
+        {"set_description": "Failed refreshed gate should block accept."},
+    )
+
+    refreshed = proposals_lib.refresh_proposal_gates(
+        home,
+        child["proposal_id"],
+        smoke_result=SMOKE_PASSING,
+        collision_result="REVISE_NEEDED: trigger collision",
+        risk_result="RISK: low\nCAPABILITIES:\n- read-only",
+        generation_quality_result={"passed": True},
+        activation_result={"passed": True},
+    )
+
+    assert refreshed["status"] == "ok"
+    assert refreshed["auto_enable_eligible"] is False
+    out = proposals_lib.accept_proposal(home, child["proposal_id"])
+    assert out["status"] == "refused"
+    assert "gates not all passed" in out["reason"]
+    assert out["gates"]["collision_check"]["passed"] is False
+    assert out["gates"]["collision_check"].get("stale") is not True
+
+
 def test_patch_proposal_refuses_malformed_parent_revision(tmp_path: Path) -> None:
     home = tmp_path / ".opensquilla"
     parent_id = _seed_proposal(home)

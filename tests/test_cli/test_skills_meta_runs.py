@@ -333,6 +333,71 @@ composition:
     assert (tmp_path / "proposals" / child_id / "SKILL.md").is_file()
 
 
+def test_proposals_refresh_cli_updates_patch_revision_gates(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(tmp_path))
+    parent = proposals_lib.write_proposal(
+        tmp_path,
+        """---
+name: cli-refresh-parent
+description: "Refresh CLI proposal"
+kind: meta
+triggers:
+  - "cli refresh parent"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+""",
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    patched = proposals_lib.patch_proposal(
+        tmp_path,
+        parent["proposal_id"],
+        {"add_triggers": ["refresh cli trigger"]},
+    )
+
+    result = runner.invoke(
+        cli_app,
+        [
+            "skills",
+            "meta",
+            "proposals",
+            "refresh",
+            patched["proposal_id"],
+            "--smoke-json",
+            json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+            "--collision-result",
+            "PASS: refreshed collision",
+            "--risk-result",
+            "RISK: low\nCAPABILITIES:\n- read-only",
+            "--generation-quality-json",
+            json.dumps({"passed": True}),
+            "--activation-json",
+            json.dumps({"passed": True}),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["status"] == "ok"
+    assert data["proposal_id"] == patched["proposal_id"]
+    assert "collision_check" in data["refreshed"]
+    gates = json.loads(
+        (tmp_path / "proposals" / patched["proposal_id"] / "gates.json").read_text(),
+    )
+    assert gates["collision_check"]["passed"] is True
+    assert gates["collision_check"].get("stale") is not True
+
+
 def test_proposals_benchmark_cli_records_report(
     runner: CliRunner,
     tmp_path: Path,

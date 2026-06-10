@@ -625,7 +625,11 @@ def _load_json_option(raw: str | None, option_name: str) -> object:
 @meta_app.command("proposals")
 def proposals_cmd(
     action: str = typer.Argument(
-        ..., help="list | accept | show | patch | benchmark | rollback — proposal CRUD action",
+        ...,
+        help=(
+            "list | accept | show | patch | refresh | benchmark | rollback — "
+            "proposal CRUD action"
+        ),
     ),
     proposal_id: str | None = typer.Argument(
         None,
@@ -655,6 +659,27 @@ def proposals_cmd(
     comparison_json: str | None = typer.Option(
         None, "--comparison-json", help="Inline benchmark comparison JSON object",
     ),
+    smoke_json: str | None = typer.Option(
+        None, "--smoke-json", help="Inline refreshed smoke gate JSON object",
+    ),
+    collision_result: str | None = typer.Option(
+        None, "--collision-result", help="Refreshed collision result text",
+    ),
+    risk_result: str | None = typer.Option(
+        None, "--risk-result", help="Refreshed risk result text",
+    ),
+    acceptance_json: str | None = typer.Option(
+        None, "--acceptance-json", help="Inline refreshed acceptance JSON object",
+    ),
+    runtime_e2e_json: str | None = typer.Option(
+        None, "--runtime-e2e-json", help="Inline refreshed runtime E2E JSON object",
+    ),
+    generation_quality_json: str | None = typer.Option(
+        None, "--generation-quality-json", help="Inline refreshed generation gate JSON",
+    ),
+    activation_json: str | None = typer.Option(
+        None, "--activation-json", help="Inline refreshed activation gate JSON",
+    ),
     json_out: bool = typer.Option(False, "--json", help="JSON output"),
 ) -> None:
     """List, inspect, or accept meta-skill proposals.
@@ -663,6 +688,7 @@ def proposals_cmd(
     ``proposals show <id>``             — print one candidate's SKILL.md + gates
     ``proposals accept <id> [--force]`` — promote to MANAGED-layer skill
     ``proposals patch <id> --patch-json '{...}'`` — create a proposal revision
+    ``proposals refresh <id> --smoke-json '{...}'`` — refresh stale revision gates
     ``proposals benchmark <baseline-id> --candidate-id <id>`` — record A/B report
     ``proposals rollback <skill-name>`` — restore a managed skill's rollback target
     """
@@ -691,7 +717,10 @@ def proposals_cmd(
             )
         return
 
-    if action in ("show", "accept", "patch", "benchmark", "rollback") and not proposal_id:
+    if (
+        action in ("show", "accept", "patch", "refresh", "benchmark", "rollback")
+        and not proposal_id
+    ):
         required_arg = "skill name" if action == "rollback" else "proposal_id"
         typer.echo(f"Error: '{action}' requires a {required_arg} argument", err=True)
         raise typer.Exit(2)
@@ -757,6 +786,40 @@ def proposals_cmd(
             )
             return
         reason = str(result.get("reason") or "proposal patch failed")
+        status = str(result.get("status") or "error")
+        typer.echo(f"{status.title()}: {reason}", err=True)
+        raise typer.Exit(1)
+
+    if action == "refresh":
+        result = proposals_lib.refresh_proposal_gates(
+            _proposals_home(),
+            proposal_id or "",
+            smoke_result=_load_json_option(smoke_json, "--smoke-json"),
+            collision_result=collision_result,
+            risk_result=risk_result,
+            acceptance_result=_load_json_option(acceptance_json, "--acceptance-json"),
+            runtime_e2e_result=_load_json_option(
+                runtime_e2e_json,
+                "--runtime-e2e-json",
+            ),
+            generation_quality_result=_load_json_option(
+                generation_quality_json,
+                "--generation-quality-json",
+            ),
+            activation_result=_load_json_option(activation_json, "--activation-json"),
+        )
+        if json_out:
+            typer.echo(_json.dumps(result))
+            if result.get("status") == "error":
+                raise typer.Exit(1)
+            return
+        if result.get("status") == "ok":
+            typer.echo(
+                f"Refreshed proposal {result.get('proposal_id')} "
+                f"({', '.join(result.get('refreshed', []))})"
+            )
+            return
+        reason = str(result.get("reason") or "proposal refresh failed")
         status = str(result.get("status") or "error")
         typer.echo(f"{status.title()}: {reason}", err=True)
         raise typer.Exit(1)

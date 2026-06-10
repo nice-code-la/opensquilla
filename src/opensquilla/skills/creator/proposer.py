@@ -1179,6 +1179,49 @@ def meta_skill_rollback_skill(skill_name: str, home: str = "") -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def meta_skill_refresh_proposal_gates(
+    proposal_id: str,
+    *,
+    smoke_json: str = "",
+    collision_result: str = "",
+    risk_result: str = "",
+    acceptance_json: str = "",
+    runtime_e2e_json: str = "",
+    generation_quality_json: str = "",
+    activation_json: str = "",
+    home: str = "",
+) -> str:
+    """Refresh stale gates on a pending proposal revision. Returns JSON."""
+    from opensquilla.paths import default_opensquilla_home
+    from opensquilla.skills.proposals_lib import refresh_proposal_gates
+
+    home_path = Path(home).expanduser() if home else default_opensquilla_home()
+    parsed: dict[str, object] = {}
+    for label, raw in (
+        ("smoke", smoke_json),
+        ("acceptance", acceptance_json),
+        ("runtime_e2e", runtime_e2e_json),
+        ("generation_quality", generation_quality_json),
+        ("activation", activation_json),
+    ):
+        value, error = _json_or_none(raw, f"invalid_{label}_json")
+        if error is not None:
+            return json.dumps(error, ensure_ascii=False)
+        parsed[label] = value
+    result = refresh_proposal_gates(
+        home_path,
+        proposal_id,
+        smoke_result=parsed["smoke"],
+        collision_result=collision_result or None,
+        risk_result=risk_result or None,
+        acceptance_result=parsed["acceptance"],
+        runtime_e2e_result=parsed["runtime_e2e"],
+        generation_quality_result=parsed["generation_quality"],
+        activation_result=parsed["activation"],
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 def _maybe_auto_enable_manual_proposal(
     home: Path,
     proposal_id: str,
@@ -1562,6 +1605,53 @@ async def meta_skill_benchmark_proposals_tool(
         comparison_json,
         eval_prompts_json,
         home,
+    )
+
+
+@tool(
+    name="meta_skill_refresh_proposal_gates",
+    description=(
+        "Refresh stale gates on a pending proposal revision. Returns JSON with "
+        "the refreshed gate names and updated eligibility."
+    ),
+    params={
+        "proposal_id": {"type": "string"},
+        "smoke_json": {"type": "string"},
+        "collision_result": {"type": "string"},
+        "risk_result": {"type": "string"},
+        "acceptance_json": {"type": "string"},
+        "runtime_e2e_json": {"type": "string"},
+        "generation_quality_json": {"type": "string"},
+        "activation_json": {"type": "string"},
+        "home": {"type": "string"},
+    },
+    required=["proposal_id"],
+    exposed_by_default=False,
+)
+async def meta_skill_refresh_proposal_gates_tool(
+    proposal_id: str,
+    smoke_json: str = "",
+    collision_result: str = "",
+    risk_result: str = "",
+    acceptance_json: str = "",
+    runtime_e2e_json: str = "",
+    generation_quality_json: str = "",
+    activation_json: str = "",
+    home: str = "",
+) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(
+        meta_skill_refresh_proposal_gates,
+        proposal_id,
+        smoke_json=smoke_json,
+        collision_result=collision_result,
+        risk_result=risk_result,
+        acceptance_json=acceptance_json,
+        runtime_e2e_json=runtime_e2e_json,
+        generation_quality_json=generation_quality_json,
+        activation_json=activation_json,
+        home=home,
     )
 
 
