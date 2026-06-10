@@ -802,6 +802,23 @@
   padding: 10px 12px 14px;
 }
 
+.sk-proposal-health {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in oklab, var(--text) 4%, transparent);
+  font-size: 12px;
+}
+
+.sk-proposal-health--warn {
+  border-color: color-mix(in oklab, var(--warn, #d97706) 32%, transparent);
+  background: color-mix(in oklab, var(--warn, #d97706) 8%, transparent);
+}
+
 .sk-proposal-row {
   display: flex;
   align-items: center;
@@ -855,6 +872,12 @@
   border-color: color-mix(in oklab, var(--warn, #d97706) 30%, transparent);
 }
 
+.sk-prop-chip--issue {
+  background: color-mix(in oklab, var(--danger, #dc2626) 10%, transparent);
+  color: var(--danger, #dc2626);
+  border-color: color-mix(in oklab, var(--danger, #dc2626) 28%, transparent);
+}
+
 .sk-prop-chip--auto {
   background: color-mix(in oklab, var(--accent) 12%, transparent);
   color: var(--accent);
@@ -866,6 +889,19 @@
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-dim);
+}
+
+.sk-dry-run p {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sk-dry-run__triggers {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
 }
 
 /* Proposal SKILL.md dialog */

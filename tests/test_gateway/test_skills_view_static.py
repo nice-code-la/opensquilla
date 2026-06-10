@@ -99,3 +99,30 @@ def test_skills_mobile_stats_keep_list_visible_in_first_viewport() -> None:
         in mobile_rule
     )
     assert ".sk-stat__value { font-size: 1.35rem; }" in mobile_rule
+
+
+def test_skills_proposals_load_and_render_audit_health() -> None:
+    source = SKILLS_JS.read_text(encoding="utf-8")
+    css = SKILLS_CSS.read_text(encoding="utf-8")
+
+    assert "let _proposalAudit = null;" in source
+    assert "exec.proposals.audit" in source
+    assert "function _proposalIssues(proposalId)" in source
+    assert "function _renderProposalHealth()" in source
+    assert "function _renderProposalIssueChips(proposalId)" in source
+    assert "${_renderProposalIssueChips(p.proposal_id)}" in source
+    assert "Proposal Health" in source
+    assert ".sk-proposal-health" in css
+    assert ".sk-prop-chip--issue" in css
+
+
+def test_skill_proposal_detail_includes_dry_run_sample_prompt() -> None:
+    source = SKILLS_JS.read_text(encoding="utf-8")
+    css = SKILLS_CSS.read_text(encoding="utf-8")
+
+    assert "function _proposalDryRun(skillMd)" in source
+    assert "function _renderProposalDryRun(skillMd)" in source
+    assert "<h4>Dry run sample</h4>" in source
+    assert "Use this sample prompt to test routing after acceptance." in source
+    assert "${_renderProposalDryRun(data.skill_md || '')}" in source
+    assert ".sk-dry-run" in css

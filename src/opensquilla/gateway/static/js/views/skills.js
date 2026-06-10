@@ -7,6 +7,7 @@ const SkillsView = (() => {
   let _intervals = [];
   let _allSkills = [];
   let _proposals = [];
+  let _proposalAudit = null;
   let _autoEnabledSkills = [];
   let _proposalsSettings = {
     available: false,
@@ -285,6 +286,11 @@ const SkillsView = (() => {
       _proposals = [];
     }
     try {
+      _proposalAudit = await _rpc.call('exec.proposals.audit');
+    } catch {
+      _proposalAudit = null;
+    }
+    try {
       const data = await _rpc.call('exec.proposals.auto_enabled.list');
       _autoEnabledSkills = (data && data.skills) || [];
     } catch {
@@ -468,6 +474,7 @@ const SkillsView = (() => {
           <span class="sk-group__meta">meta-skill-creator candidates awaiting your accept/reject decision.</span>
         </summary>
         <div class="sk-proposals-list">
+          ${_renderProposalHealth()}
           ${_proposals.map(_renderProposalRow).join('')}
         </div>
       </details>`;
@@ -592,6 +599,7 @@ const SkillsView = (() => {
         ${autoDecision}
         ${profile}
         ${chainHint}
+        ${_renderProposalIssueChips(p.proposal_id)}
       </div>
       <div class="sk-proposal-row__actions">
         <button class="btn btn--ghost btn--sm" data-proposal-show="${pid}" type="button">Show</button>
@@ -599,6 +607,46 @@ const SkillsView = (() => {
         <button class="btn btn--ghost btn--sm" data-proposal-reject="${pid}" type="button">Reject</button>
       </div>
     </div>`;
+  }
+
+  function _proposalIssues(proposalId) {
+    const issues = (_proposalAudit && Array.isArray(_proposalAudit.issues))
+      ? _proposalAudit.issues
+      : [];
+    return issues.filter(issue => {
+      if (!issue) return false;
+      if (issue.proposal_id && issue.proposal_id === proposalId) return true;
+      return Array.isArray(issue.proposal_ids) && issue.proposal_ids.includes(proposalId);
+    });
+  }
+
+  function _renderProposalHealth() {
+    if (!_proposalAudit || !Array.isArray(_proposalAudit.issues)) return '';
+    const issues = _proposalAudit.issues;
+    const counts = _proposalAudit.counts || {};
+    if (!issues.length) {
+      return `<div class="sk-proposal-health">
+        <strong>Proposal Health</strong>
+        <span class="sk-dim">No drift issues detected.</span>
+      </div>`;
+    }
+    return `<div class="sk-proposal-health sk-proposal-health--warn">
+      <strong>Proposal Health</strong>
+      <span>${issues.length} issue${issues.length === 1 ? '' : 's'}</span>
+      <span class="sk-dim">long pending: ${_esc(counts.long_pending_proposals || 0)}</span>
+      <span class="sk-dim">collisions: ${_esc(counts.pending_trigger_collisions || 0)}</span>
+      <span class="sk-dim">learning repeats: ${_esc(counts.repeated_learning_signals || 0)}</span>
+    </div>`;
+  }
+
+  function _renderProposalIssueChips(proposalId) {
+    const issues = _proposalIssues(proposalId);
+    if (!issues.length) return '';
+    return issues.slice(0, 3).map(issue => {
+      const type = String(issue.type || 'issue').replace(/_/g, ' ');
+      const detail = issue.trigger || issue.reason || issue.stale_gates?.join(', ') || '';
+      return `<span class="sk-prop-chip sk-prop-chip--issue" title="${_esc(detail)}">${_esc(type)}</span>`;
+    }).join('');
   }
 
   function _renderAutoEnabledRow(s) {
@@ -665,6 +713,7 @@ const SkillsView = (() => {
           <h4>Auto-enable Audit</h4>
           ${auditHtml}
         </section>
+        ${_renderProposalDryRun(data.skill_md || '')}
         <section class="sk-detail__section">
           <h4>SKILL.md</h4>
           <pre class="sk-detail__pre">${_esc(data.skill_md || '')}</pre>
@@ -680,6 +729,41 @@ const SkillsView = (() => {
     } catch (err) {
       UI.toast('Show failed: ' + err.message, 'err');
     }
+  }
+
+  function _proposalDryRun(skillMd) {
+    const triggers = [];
+    const lines = String(skillMd || '').split('\n');
+    let inTriggers = false;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (line === 'triggers:') {
+        inTriggers = true;
+        continue;
+      }
+      if (inTriggers && /^[A-Za-z_][A-Za-z0-9_-]*:/.test(line)) break;
+      if (inTriggers && line.startsWith('- ')) {
+        const trigger = line.slice(2).trim().replace(/^["']|["']$/g, '');
+        if (trigger) triggers.push(trigger);
+      }
+    }
+    const sample = triggers[0]
+      ? `Please run ${triggers[0]} on this sample request.`
+      : 'Use one of the proposal triggers in a new chat after acceptance.';
+    return { triggers, sample };
+  }
+
+  function _renderProposalDryRun(skillMd) {
+    const dryRun = _proposalDryRun(skillMd);
+    const triggerList = dryRun.triggers.length
+      ? dryRun.triggers.slice(0, 4).map(t => `<code>${_esc(t)}</code>`).join(' ')
+      : '<span class="sk-dim">No triggers found in proposal frontmatter.</span>';
+    return `<section class="sk-detail__section sk-dry-run">
+      <h4>Dry run sample</h4>
+      <p>Use this sample prompt to test routing after acceptance.</p>
+      <pre class="sk-detail__pre">${_esc(dryRun.sample)}</pre>
+      <div class="sk-dry-run__triggers">${triggerList}</div>
+    </section>`;
   }
 
   async function _acceptProposal(proposalId) {
