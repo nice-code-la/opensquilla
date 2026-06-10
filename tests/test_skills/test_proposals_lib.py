@@ -241,6 +241,16 @@ def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) ->
             "reason": "overbroad trigger",
         },
     )
+    failed = proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "failed",
+            "skill_name": "learn-skill",
+            "source": "meta_skill_persist_proposal",
+            "reason": "generation_quality_failed",
+            "lessons": ["fix gate inputs before retry"],
+        },
+    )
     invalid = proposals_lib.record_creator_learning_event(
         home,
         {"event_type": "unknown", "proposal_id": "abcd1234"},
@@ -249,6 +259,7 @@ def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) ->
     assert accepted["status"] == "ok"
     assert benchmarked["status"] == "ok"
     assert rolled_back["status"] == "ok"
+    assert failed["status"] == "ok"
     assert invalid == {"status": "refused", "reason": "invalid_event_type"}
     path = home / "creator-learning" / "events.jsonl"
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
@@ -256,6 +267,7 @@ def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) ->
         "accepted",
         "benchmarked",
         "rolled_back",
+        "failed",
     ]
     assert rows[0]["outcome"] == "accepted after review with newline"
     assert rows[0]["lessons"][0] == "keep trigger narrow please"
@@ -264,6 +276,8 @@ def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) ->
     assert isinstance(rows[0]["recorded_at_ms"], int)
     assert rows[1]["passed"] is True
     assert rows[2]["restored_proposal_id"] == "deadbeef"
+    assert rows[3]["source"] == "meta_skill_persist_proposal"
+    assert rows[3]["reason"] == "generation_quality_failed"
 
 
 def test_creator_learning_summary_compacts_recent_events(tmp_path: Path) -> None:

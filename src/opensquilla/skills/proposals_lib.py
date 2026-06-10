@@ -32,7 +32,12 @@ import yaml
 PROPOSAL_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
 SKILL_NAME_PATTERN = re.compile(r"[\w\-]+")
 RISK_LEVELS = frozenset({"low", "medium", "high"})
-_CREATOR_LEARNING_EVENT_TYPES = frozenset({"accepted", "benchmarked", "rolled_back"})
+_CREATOR_LEARNING_EVENT_TYPES = frozenset({
+    "accepted",
+    "benchmarked",
+    "failed",
+    "rolled_back",
+})
 _CREATOR_LEARNING_STRING_FIELDS = (
     "outcome",
     "reason",

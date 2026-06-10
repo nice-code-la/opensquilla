@@ -984,6 +984,30 @@ def meta_skill_smoke_run(
     return json.dumps(result, ensure_ascii=False)
 
 
+def _skill_name_from_skill_md(skill_md: str) -> str:
+    match = _re.search(r"(?m)^name:\s*['\"]?([\w-]+)['\"]?\s*$", skill_md)
+    return match.group(1) if match else ""
+
+
+def _record_persist_failure(home: Path | None, skill_md: str, reason: str) -> None:
+    if home is None:
+        return
+    try:
+        from opensquilla.skills.proposals_lib import record_creator_learning_event
+
+        record_creator_learning_event(
+            home,
+            {
+                "event_type": "failed",
+                "skill_name": _skill_name_from_skill_md(skill_md),
+                "source": "meta_skill_persist_proposal",
+                "reason": reason,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        return
+
+
 def meta_skill_persist_proposal(
     skill_md: str,
     lint_result: str,
@@ -1021,6 +1045,7 @@ def meta_skill_persist_proposal(
         args.extend(["--home", home])
     proc = subprocess.run(args, capture_output=True, text=True, check=False)
     if proc.returncode != 0:
+        _record_persist_failure(home_path, skill_md, "subprocess_failed")
         return proc.stdout or json.dumps({
             "error": "proposals subprocess exited non-zero",
             "stderr": proc.stderr[:500],
@@ -1029,7 +1054,14 @@ def meta_skill_persist_proposal(
     try:
         out = json.loads(proc.stdout)
     except json.JSONDecodeError:
+        _record_persist_failure(home_path, skill_md, "invalid_persist_json")
         return proc.stdout
+    if out.get("status") != "ok":
+        _record_persist_failure(
+            home_path,
+            skill_md,
+            str(out.get("reason") or out.get("error") or "persist_refused"),
+        )
     if (
         auto_enable_manual
         and out.get("status") == "ok"

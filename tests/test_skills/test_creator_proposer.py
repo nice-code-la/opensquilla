@@ -1029,6 +1029,41 @@ def test_persist_proposal_forwards_bundle_files_json(monkeypatch) -> None:
     )
 
 
+def test_persist_proposal_records_failed_learning_event(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / ".opensquilla"
+
+    def fake_run(args, *, capture_output, text, check):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "status": "refused",
+                "reason": "generation_quality_failed",
+            }),
+            stderr="",
+        )
+
+    monkeypatch.setattr(proposer.subprocess, "run", fake_run)
+
+    out = json.loads(proposer.meta_skill_persist_proposal(
+        skill_md="---\nname: synth-failed-persist\n---\n",
+        lint_result='{"G1": {"passed": true}}',
+        smoke_result='{"G3": {"passed": true}}',
+        home=str(home),
+    ))
+
+    assert out["status"] == "refused"
+    path = home / "creator-learning" / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert rows[-1]["event_type"] == "failed"
+    assert rows[-1]["skill_name"] == "synth-failed-persist"
+    assert rows[-1]["source"] == "meta_skill_persist_proposal"
+    assert rows[-1]["reason"] == "generation_quality_failed"
+
+
 def test_patch_proposal_tool_wrapper_creates_child_revision(tmp_path) -> None:
     from opensquilla.skills import proposals_lib
     from opensquilla.skills.creator import proposer
