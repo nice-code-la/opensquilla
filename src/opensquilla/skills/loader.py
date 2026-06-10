@@ -608,8 +608,14 @@ class SkillLoader:
                 raw_activation_meta = raw_meta_dict.get("opensquilla", {})
                 if isinstance(raw_activation_meta, dict):
                     activation_meta = cast(dict[str, Any], raw_activation_meta)
-            requires_tools = activation_meta.get("requires_tools", [])
-            fallback_for_toolsets = activation_meta.get("fallback_for_toolsets", [])
+            requires_tools = activation_meta.get(
+                "requires_tools",
+                activation_meta.get("requires_toolsets", []),
+            )
+            fallback_for_toolsets = activation_meta.get(
+                "fallback_for_toolsets",
+                activation_meta.get("fallback_for_tools", []),
+            )
 
             # Meta-Skill fields (MVP): kind, meta_priority, composition_raw.
             # Non-meta skills get the defaults; behavior unchanged.

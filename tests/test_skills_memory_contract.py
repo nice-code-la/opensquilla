@@ -24,6 +24,38 @@ def test_memory_skill_is_parseable_and_gated_on_read_tools(tmp_path: Path) -> No
     assert skill.provenance.maintained_by == "OpenSquilla"
 
 
+def test_loader_maps_creator_visibility_aliases_to_runtime_fields(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "bundled" / "alias-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: alias-skill
+description: "Uses creator visibility aliases"
+metadata:
+  opensquilla:
+    requires_toolsets:
+      - browser
+      - filesystem
+    fallback_for_tools:
+      - plain_shell
+---
+Alias skill body.
+""",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        bundled_dir=tmp_path / "bundled",
+        snapshot_path=tmp_path / "skills_snapshot.json",
+    )
+
+    skill = next(s for s in loader.load_all() if s.name == "alias-skill")
+
+    assert skill.requires_tools == ["browser", "filesystem"]
+    assert skill.fallback_for_toolsets == ["plain_shell"]
+
+
 def test_memory_skill_documents_usable_write_and_forget_paths() -> None:
     text = MEMORY_SKILL.read_text(encoding="utf-8")
     lower = text.lower()
