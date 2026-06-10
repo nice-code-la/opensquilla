@@ -61,9 +61,12 @@ def test_approval_card_metadata_wraps_long_runtime_identifiers() -> None:
 def test_approval_card_title_prefers_summary_over_tool_name() -> None:
     js = APPROVALS_JS.read_text(encoding="utf-8")
 
+    title_expr = (
+        "const title = item.summary || item.toolName || item.pluginId || item.actionKind "
+        "|| 'Unknown';"
+    )
     assert (
-        "const title = item.summary || item.toolName || item.pluginId || item.actionKind || 'Unknown';"
-        in js
+        title_expr in js
     )
     assert '<span class="ap-card__name">${_esc(title)}</span>' in js
 
@@ -75,7 +78,11 @@ def test_approval_card_renders_review_context_beyond_summary() -> None:
     assert "const context = _approvalContext(item);" in js
     assert "function _approvalContext(item)" in js
     assert "item.reason || item.args?.reason" in js
-    assert "item.riskLevel || item.risk_level || item.args?.riskLevel || item.args?.risk_level" in js
+    risk_expr = (
+        "item.riskLevel || item.risk_level || item.args?.riskLevel || "
+        "item.args?.risk_level"
+    )
+    assert risk_expr in js
     assert "item.source || item.args?.source || item.triggeredBy || item.triggered_by" in js
     assert '<div class="ap-card__context">' in js
     assert '<span class="ap-context__label">Reason</span>' in js
