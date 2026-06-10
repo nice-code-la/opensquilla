@@ -1130,9 +1130,13 @@ def test_accept_replace_records_deprecation_metadata(tmp_path: Path) -> None:
 
 def test_write_accept_and_patch_preserve_bundle_files(tmp_path: Path) -> None:
     home = tmp_path / ".opensquilla"
+    skill_md = (
+        SAMPLE_SKILL_MD
+        + "\nUses helper `scripts/render.py` and reference `references/eval.json`.\n"
+    )
     result = proposals_lib.write_proposal(
         home,
-        SAMPLE_SKILL_MD,
+        skill_md,
         GATES_PASSING,
         SMOKE_PASSING,
         bundle_files={
@@ -1193,6 +1197,44 @@ def test_write_proposal_refuses_unsafe_bundle_paths(tmp_path: Path) -> None:
     assert out["status"] == "refused"
     assert out["reason"] == "invalid_bundle_path:../escape.py"
     assert proposals_lib.pending_count(home) == {"count": 0}
+
+
+def test_write_proposal_flags_missing_referenced_bundle_file(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    skill_md = SAMPLE_SKILL_MD + "\nUses helper `scripts/missing.py`.\n"
+
+    result = proposals_lib.write_proposal(
+        home,
+        skill_md,
+        GATES_PASSING,
+        SMOKE_PASSING,
+    )
+
+    assert result["status"] == "ok"
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    gate = shown["gates"]["bundle_validation"]
+    assert gate["passed"] is False
+    assert gate["missing_references"] == ["scripts/missing.py"]
+    assert shown["gates"]["auto_enable_eligible"] is False
+
+
+def test_write_proposal_flags_unreferenced_script_bundle_file(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        bundle_files={"scripts/render.py": "print('unused')\n"},
+    )
+
+    assert result["status"] == "ok"
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    gate = shown["gates"]["bundle_validation"]
+    assert gate["passed"] is False
+    assert gate["unreferenced_scripts"] == ["scripts/render.py"]
+    assert shown["gates"]["auto_enable_eligible"] is False
 
 
 def test_rollback_skill_restores_recorded_target_and_archives_current(

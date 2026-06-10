@@ -74,6 +74,9 @@ _PATCH_STALE_GATES = (
 )
 _BUNDLE_MANIFEST = "bundle.json"
 _RESERVED_PROPOSAL_FILES = frozenset({"SKILL.md", "gates.json", _BUNDLE_MANIFEST})
+_BUNDLE_REFERENCE_PATTERN = re.compile(
+    r"(?<![\w./-])((?:scripts|evals|references)/[A-Za-z0-9_.\-/]+)",
+)
 
 
 def proposals_dir(home: Path) -> Path:
@@ -177,6 +180,39 @@ def _read_bundle_files(root: Path) -> dict[str, str]:
         if path.is_file():
             out[rel_path] = path.read_text(encoding="utf-8")
     return out
+
+
+def _extract_bundle_references(skill_md: str) -> list[str]:
+    references: list[str] = []
+    for match in _BUNDLE_REFERENCE_PATTERN.finditer(skill_md):
+        ref = match.group(1).rstrip(".,;:)'\"`]")
+        if ref and ref not in references:
+            references.append(ref)
+    return references
+
+
+def _evaluate_bundle_validation(skill_md: str, bundle_files: dict[str, str]) -> dict:
+    references = _extract_bundle_references(skill_md)
+    bundle_paths = sorted(bundle_files)
+    missing_references = [
+        ref for ref in references
+        if ref not in bundle_files
+    ]
+    unreferenced_scripts = [
+        path for path in bundle_paths
+        if path.startswith("scripts/") and path not in references
+    ]
+    required = bool(references or bundle_files)
+    passed = not missing_references and not unreferenced_scripts
+    return {
+        "required": required,
+        "passed": passed,
+        "reason": "ok" if passed else "bundle_validation_failed",
+        "file_count": len(bundle_paths),
+        "references": references,
+        "missing_references": missing_references,
+        "unreferenced_scripts": unreferenced_scripts,
+    }
 
 
 def is_valid_proposal_id(proposal_id: str | None) -> bool:
@@ -537,6 +573,7 @@ def _recompute_auto_enable_eligible(gates: dict) -> bool:
         "runtime_e2e",
         "generation_quality",
         "activation_eval",
+        "bundle_validation",
     )
     return (
         lint_passed
@@ -635,6 +672,10 @@ def write_proposal(
         required=creator_quality_required,
         missing_reason="missing_activation_result",
     )
+    bundle_validation_gate = _evaluate_bundle_validation(
+        skill_md,
+        normalised_bundle_files,
+    )
     # D1: ``degraded`` smoke (no fixture LLM available → deterministic
     # stub fixtures) flags G3/G4 as ``passed: True`` even though no
     # cross-vendor verification actually happened. Treating it as
@@ -659,6 +700,7 @@ def write_proposal(
         and bool(runtime_gate.get("passed", False))
         and generation_quality_gate.get("passed") is True
         and activation_gate.get("passed") is True
+        and bundle_validation_gate.get("passed") is True
     )
     gates = {
         "creator_mode": mode,
@@ -670,6 +712,7 @@ def write_proposal(
         "runtime_e2e": runtime_gate,
         "generation_quality": generation_quality_gate,
         "activation_eval": activation_gate,
+        "bundle_validation": bundle_validation_gate,
         "auto_enable_eligible": eligible,
     }
     if normalised_bundle_files:
@@ -1152,6 +1195,10 @@ def patch_proposal(
         "creator_mode": "PATCH_PROPOSAL",
         "revision": revision,
         "lint": _lint_revised_skill(revised_skill_md),
+        "bundle_validation": _evaluate_bundle_validation(
+            revised_skill_md,
+            bundle_files,
+        ),
         "auto_enable_eligible": False,
     }
     if bundle_files:
