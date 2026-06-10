@@ -432,6 +432,12 @@ composition:
           Clarified intent:
           {{ outputs.clarify_intent | truncate(1000) }}
 
+          Conditional visibility guidance:
+          If the user request or draft seed explicitly names required toolsets,
+          fallback tools, supported platforms, or config keys, preserve those as
+          optional slot fields `requires_toolsets`, `fallback_for_tools`,
+          `platforms`, and `config_keys`. Do not invent conditional visibility fields when the request does not name them.
+
     - id: assemble
       label: "组装"
       label_en: "Assembly"

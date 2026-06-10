@@ -18,6 +18,30 @@ metadata:
     no_write: true
     write_access: false
     network_access: false
+{%- if requires_toolsets %}
+    requires_toolsets:
+{%- for item in requires_toolsets %}
+      - {{ item | tojson }}
+{%- endfor %}
+{%- endif %}
+{%- if fallback_for_tools %}
+    fallback_for_tools:
+{%- for item in fallback_for_tools %}
+      - {{ item | tojson }}
+{%- endfor %}
+{%- endif %}
+{%- if platforms %}
+    platforms:
+{%- for item in platforms %}
+      - {{ item | tojson }}
+{%- endfor %}
+{%- endif %}
+{%- if config_keys %}
+    config_keys:
+{%- for item in config_keys %}
+      - {{ item | tojson }}
+{%- endfor %}
+{%- endif %}
     creator_gates:
       - "G1 structural lint"
       - "G2 scheduler dry-run"

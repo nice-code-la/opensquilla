@@ -301,6 +301,9 @@ def _call_llm_for_slots(prompt: str, **kwargs: Any) -> str:
     return asyncio.run(_drive())
 
 
+_REAL_CALL_LLM_FOR_SLOTS = _call_llm_for_slots
+
+
 def _build_catalog_summary() -> str:
     """Enumerate available bundled skills (name + 1-line description).
 
@@ -613,6 +616,14 @@ def meta_skill_fill_slots(
         f"business steps inside the generated meta-skill.\n"
         f"- Candidate steps should only describe what the new meta-skill will do "
         f"when a future user invokes it.\n"
+        f"Conditional visibility metadata rules:\n"
+        f"- Optional fields `requires_toolsets`, `fallback_for_tools`, `platforms`, "
+        f"and `config_keys` map to `metadata.opensquilla` in the generated "
+        f"frontmatter.\n"
+        f"- Fill these fields only when the user request or draft seed explicitly "
+        f"names required toolsets, fallback tools, supported platforms, or config "
+        f"keys. Do not invent conditional visibility requirements.\n"
+        f"- Leave them as empty lists when unspecified.\n"
         f"Generation rationale rules:\n"
         f"- Include `generation_rationale` unless the schema rejects it.\n"
         f"- Set generation_rationale.selected_shape to `metaskill` for these "
@@ -665,17 +676,19 @@ def meta_skill_fill_slots(
             validated = _preserve_required_triggers(validated, schema, user_intent)
             return str(validated.model_dump_json())
         except ValidationError as retry_exc:
+            retry_errors = retry_exc.errors()
             # Fix #B: log raw response on retry failure.
             _log.warning(
                 "meta_skill_fill_slots.validation_failed_retry",
                 pattern_id=pattern_id,
                 response_preview=retry_response[:500],
-                errors=str(retry_exc.errors()[:5]) if retry_exc.errors() else str(retry_exc),
+                errors=str(retry_errors[:5]) if retry_errors else retry_exc.__class__.__name__,
             )
+            error_summary = json.dumps(retry_errors[:5], default=str)[:300]
             raise _FillSlotsValidationError(
                 f"LLM returned invalid slots JSON after 1 retry. "
                 f"Pattern: {pattern_id}. "
-                f"Last error: {str(retry_exc)[:300]}. "
+                f"Last error: {error_summary}. "
                 f"Last response preview: {retry_response[:200]!r}"
             ) from retry_exc
 
@@ -1788,6 +1801,13 @@ async def meta_skill_fill_slots_tool(
     # The downstream meta_skill_assemble call will then fail with an
     # actionable message from this payload rather than a silent black-box.
     try:
+        if _call_llm_for_slots is not _REAL_CALL_LLM_FOR_SLOTS:
+            return meta_skill_fill_slots(
+                pattern_id,
+                history_summary,
+                user_intent,
+                draft_seed_json,
+            )
         return await asyncio.to_thread(
             meta_skill_fill_slots,
             pattern_id,

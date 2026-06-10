@@ -5,12 +5,17 @@ from __future__ import annotations
 import json
 
 import pytest
+import yaml
 
 from opensquilla.skills.creator.patterns.schemas import (
     FanOutMergeSlots,
     SequentialSlots,
 )
 from opensquilla.skills.creator.proposer import meta_skill_assemble
+
+
+def _frontmatter(skill_md: str) -> dict:
+    return yaml.safe_load(skill_md.split("---", 2)[1]) or {}
 
 
 def test_sequential_slots_min_steps() -> None:
@@ -59,6 +64,50 @@ def test_meta_skill_assemble_p1() -> None:
     assert 'skill: "summarize"' in md
     assert 'skill: "memory"' in md
     assert "depends_on: [a]" in md
+
+
+def test_meta_skill_assemble_includes_optional_visibility_metadata() -> None:
+    slots = {
+        "name": "test-tool-gated",
+        "description": "Pipeline visible only when requested toolsets are available.",
+        "triggers": ["tool gated flow"],
+        "steps": [
+            {"id": "a", "skill": "summarize", "task": "extract", "with_keys": {}},
+            {"id": "b", "skill": "memory", "task": "store", "with_keys": {}},
+        ],
+        "requires_toolsets": ["browser", "filesystem"],
+        "fallback_for_tools": ["plain_shell"],
+        "platforms": ["linux", "darwin"],
+        "config_keys": ["OPENSQUILLA_BROWSER_PROFILE"],
+    }
+
+    md = meta_skill_assemble("p1_sequential", json.dumps(slots))
+    opensquilla_meta = _frontmatter(md)["metadata"]["opensquilla"]
+
+    assert opensquilla_meta["requires_toolsets"] == ["browser", "filesystem"]
+    assert opensquilla_meta["fallback_for_tools"] == ["plain_shell"]
+    assert opensquilla_meta["platforms"] == ["linux", "darwin"]
+    assert opensquilla_meta["config_keys"] == ["OPENSQUILLA_BROWSER_PROFILE"]
+
+
+def test_meta_skill_assemble_omits_visibility_metadata_when_unspecified() -> None:
+    slots = {
+        "name": "test-default-visible",
+        "description": "Pipeline that should not invent conditional visibility fields.",
+        "triggers": ["default visible flow"],
+        "steps": [
+            {"id": "a", "skill": "summarize", "task": "extract", "with_keys": {}},
+            {"id": "b", "skill": "memory", "task": "store", "with_keys": {}},
+        ],
+    }
+
+    md = meta_skill_assemble("p1_sequential", json.dumps(slots))
+    opensquilla_meta = _frontmatter(md)["metadata"]["opensquilla"]
+
+    assert "requires_toolsets" not in opensquilla_meta
+    assert "fallback_for_tools" not in opensquilla_meta
+    assert "platforms" not in opensquilla_meta
+    assert "config_keys" not in opensquilla_meta
 
 
 def test_meta_skill_assemble_rejects_invalid_slots() -> None:

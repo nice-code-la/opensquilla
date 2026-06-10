@@ -58,6 +58,28 @@ class GenerationRationale(BaseModel):
         return v
 
 
+class ConditionalVisibility(BaseModel):
+    requires_toolsets: list[str] = Field(default_factory=list, max_length=8)
+    fallback_for_tools: list[str] = Field(default_factory=list, max_length=8)
+    platforms: list[str] = Field(default_factory=list, max_length=8)
+    config_keys: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator(
+        "requires_toolsets",
+        "fallback_for_tools",
+        "platforms",
+        "config_keys",
+        mode="before",
+    )
+    @classmethod
+    def _visibility_items_yaml_safe(cls, v: object) -> object:
+        if isinstance(v, list):
+            for item in v:
+                if isinstance(item, str):
+                    _check_yaml_safe(item, "conditional visibility item")
+        return v
+
+
 class SequentialStep(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,30}$")
     skill: str
@@ -75,7 +97,7 @@ class SequentialStep(BaseModel):
         return _check_yaml_safe(v, "skill")
 
 
-class SequentialSlots(BaseModel):
+class SequentialSlots(ConditionalVisibility):
     name: str = Field(
         min_length=3, max_length=64,
         pattern=r"^[a-z][a-z0-9_\-]{2,63}$",
@@ -136,7 +158,7 @@ class FanOutTail(BaseModel):
         return _check_yaml_safe(v, "skill")
 
 
-class FanOutMergeSlots(BaseModel):
+class FanOutMergeSlots(ConditionalVisibility):
     name: str = Field(
         min_length=3, max_length=64,
         pattern=r"^[a-z][a-z0-9_\-]{2,63}$",

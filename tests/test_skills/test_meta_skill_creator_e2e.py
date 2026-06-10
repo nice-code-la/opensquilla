@@ -250,6 +250,7 @@ def test_creator_dag_runs_generation_quality_and_activation_before_persist(tmp_p
         "assemble",
         "generation_quality",
         "activation_eval",
+        "bundle_assets",
     ]
     assert persist.tool_args["generation_quality_result"] == "{{ outputs.generation_quality }}"
     assert persist.tool_args["activation_result"] == "{{ outputs.activation_eval }}"
@@ -294,6 +295,23 @@ def test_creator_dag_forwards_optional_draft_seed_to_fill_slots() -> None:
     assert list(steps["generation_quality"].depends_on) == ["fill_slots"]
     assert "generation_quality_result" in steps["persist"].tool_args
     assert "activation_result" in steps["persist"].tool_args
+
+
+def test_creator_dag_forwards_conditional_visibility_guidance_to_fill_slots() -> None:
+    from opensquilla.skills.loader import SkillLoader
+
+    spec = SkillLoader(bundled_dir=BUNDLED).get_by_name("meta-skill-creator")
+    assert spec is not None
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    fill_slots_intent = str(steps["fill_slots"].tool_args["user_intent"])
+    assert "requires_toolsets" in fill_slots_intent
+    assert "fallback_for_tools" in fill_slots_intent
+    assert "platforms" in fill_slots_intent
+    assert "config_keys" in fill_slots_intent
+    assert "Do not invent conditional visibility fields" in fill_slots_intent
 
 
 def test_creator_dag_generates_optional_bundle_assets_before_persist() -> None:
