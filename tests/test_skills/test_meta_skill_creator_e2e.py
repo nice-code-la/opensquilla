@@ -331,9 +331,12 @@ def test_creator_dag_forwards_optional_learning_summary_to_fill_slots() -> None:
     assert "learning_summary" in steps["fill_slots"].depends_on
     fill_slots_intent = str(steps["fill_slots"].tool_args["user_intent"])
     assert "Creator learning summary" in fill_slots_intent
+    expected_summary_template = (
+        '{{ outputs.learning_summary | default(inputs.creator_learning_summary | '
+        'default("")) | xml_escape | truncate(2000) }}'
+    )
     assert (
-        '{{ outputs.learning_summary | default(inputs.creator_learning_summary | default("")) | xml_escape | truncate(2000) }}'
-        in fill_slots_intent
+        expected_summary_template in fill_slots_intent
     )
     assert "advisory memory" in fill_slots_intent
 
