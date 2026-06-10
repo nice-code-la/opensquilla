@@ -936,6 +936,38 @@ def test_persist_proposal_forwards_generation_quality_and_activation_results(mon
     assert args[args.index("--activation-result") + 1] == '{"passed": true}'
 
 
+def test_persist_proposal_forwards_bundle_files_json(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from opensquilla.skills.creator import proposer
+
+    captured: dict[str, object] = {}
+
+    def fake_run(args, *, capture_output, text, check):
+        captured["args"] = args
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"status": "ok", "proposal_id": "proposal-1"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(proposer.subprocess, "run", fake_run)
+
+    out = json.loads(proposer.meta_skill_persist_proposal(
+        skill_md="---\nname: synth-test\n---\n",
+        lint_result='{"G1": {"passed": true}}',
+        smoke_result='{"G3": {"passed": true}}',
+        bundle_files_json='{"scripts/render.py": "print(1)\\n"}',
+    ))
+
+    assert out["proposal_id"] == "proposal-1"
+    args = captured["args"]
+    assert isinstance(args, list)
+    assert args[args.index("--bundle-files-json") + 1] == (
+        '{"scripts/render.py": "print(1)\\n"}'
+    )
+
+
 def test_patch_proposal_tool_wrapper_creates_child_revision(tmp_path) -> None:
     from opensquilla.skills import proposals_lib
     from opensquilla.skills.creator import proposer

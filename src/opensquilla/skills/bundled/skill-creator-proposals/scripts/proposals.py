@@ -46,6 +46,7 @@ def cmd_write_proposal(args: argparse.Namespace) -> dict:
     )
     lint_result = json.loads(args.lint_result)
     smoke_result = json.loads(args.smoke_result)
+    bundle_files = _load_json_arg(args.bundle_files_json, "--bundle-files-json")
     return proposals_lib.write_proposal(
         Path(args.home),
         skill_md,
@@ -58,6 +59,7 @@ def cmd_write_proposal(args: argparse.Namespace) -> dict:
         risk_result=args.risk_result,
         generation_quality_result=args.generation_quality_result,
         activation_result=args.activation_result,
+        bundle_files=bundle_files,
     )
 
 
@@ -167,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--risk-result", default="")
     p.add_argument("--generation-quality-result", default=None)
     p.add_argument("--activation-result", default=None)
+    p.add_argument("--bundle-files-json", default=None)
     p.add_argument("--proposal-id", default=None)
     p.add_argument("--skill-name", default=None)
     p.add_argument("--force", action="store_true")

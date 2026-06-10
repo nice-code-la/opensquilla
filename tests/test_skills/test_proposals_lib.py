@@ -963,6 +963,73 @@ def test_accept_replace_records_supersession_and_rollback_target(
     assert (home / "proposals" / replacement_id).exists() is False
 
 
+def test_write_accept_and_patch_preserve_bundle_files(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        bundle_files={
+            "scripts/render.py": "print('render')\n",
+            "references/eval.json": '{"cases": []}\n',
+        },
+    )
+    assert result["status"] == "ok"
+    proposal_id = result["proposal_id"]
+
+    shown = proposals_lib.show_proposal(home, proposal_id)
+    assert shown["bundle"]["kind"] == "skill_bundle"
+    assert shown["bundle"]["entrypoint"] == "SKILL.md"
+    assert shown["bundle"]["files"] == [
+        "references/eval.json",
+        "scripts/render.py",
+    ]
+    assert shown["bundle_files"]["scripts/render.py"] == "print('render')\n"
+
+    patched = proposals_lib.patch_proposal(
+        home,
+        proposal_id,
+        {"set_description": "Bundle revision keeps attached resources."},
+    )
+    assert patched["status"] == "ok"
+    child_id = patched["proposal_id"]
+    assert (
+        home / "proposals" / child_id / "scripts" / "render.py"
+    ).read_text(encoding="utf-8") == "print('render')\n"
+
+    child_gates = json.loads(
+        (home / "proposals" / child_id / "gates.json").read_text(encoding="utf-8"),
+    )
+    assert child_gates["bundle"]["files"] == [
+        "references/eval.json",
+        "scripts/render.py",
+    ]
+
+    accepted = proposals_lib.accept_proposal(home, proposal_id)
+    assert accepted["status"] == "ok"
+    managed = home / "skills" / "synth-test-pipeline"
+    assert (managed / "scripts" / "render.py").read_text(encoding="utf-8") == (
+        "print('render')\n"
+    )
+
+
+def test_write_proposal_refuses_unsafe_bundle_paths(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+
+    out = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+        bundle_files={"../escape.py": "bad"},
+    )
+
+    assert out["status"] == "refused"
+    assert out["reason"] == "invalid_bundle_path:../escape.py"
+    assert proposals_lib.pending_count(home) == {"count": 0}
+
+
 def test_rollback_skill_restores_recorded_target_and_archives_current(
     tmp_path: Path,
 ) -> None:

@@ -466,6 +466,46 @@ composition:
         positive_prompts: "auto"
         catalog_negative_prompts: "auto"
 
+    - id: bundle_assets
+      label: "资源打包"
+      label_en: "Bundle assets"
+      kind: llm_chat
+      depends_on: [assemble, generation_quality]
+      when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
+      with:
+        system: |
+          You decide whether the generated meta-skill should be delivered as a
+          small skill bundle. Use only the candidate SKILL.md, the original
+          request, and generation-quality output. Do not invent large assets.
+        task: |
+          Return only a JSON object mapping safe relative file paths to UTF-8
+          text content. Return {} when the candidate is complete as a single
+          SKILL.md.
+
+          Use bundle files only when they materially improve generated
+          capability quality, for example:
+          - scripts/<name>.py for deterministic helper logic referenced by the
+            generated SKILL.md
+          - evals/<name>.json for reusable evaluation prompts or fixtures
+          - references/<name>.md for concise domain instructions too bulky for
+            the main SKILL.md
+
+          Constraints:
+          - Do not include SKILL.md, gates.json, bundle.json, absolute paths,
+            parent-directory paths, binary data, secrets, credentials, or
+            generated cache/output files.
+          - Keep files minimal and directly referenced by the proposed
+            meta-skill. Prefer {} over speculative assets.
+
+          User request:
+          {{ inputs.user_message | xml_escape | truncate(1200) }}
+
+          Candidate SKILL.md:
+          {{ outputs.assemble | truncate(8000) }}
+
+          Generation quality:
+          {{ outputs.generation_quality | truncate(2000) }}
+
     - id: collision_check
       label: "冲突检查"
       label_en: "Conflict check"
@@ -658,7 +698,7 @@ composition:
       label: "预览"
       label_en: "Preview"
       kind: llm_chat
-      depends_on: [smoke, acceptance_compare, runtime_e2e, generation_quality, activation_eval]
+      depends_on: [smoke, acceptance_compare, runtime_e2e, generation_quality, activation_eval, bundle_assets]
       when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       with:
         system: |
@@ -703,11 +743,14 @@ composition:
           Runtime E2E:
           {{ outputs.runtime_e2e | truncate(2000) }}
 
+          Bundle assets JSON:
+          {{ outputs.bundle_assets | truncate(2000) }}
+
     - id: persist
       label: "保存"
       label_en: "Save"
       kind: tool_call
-      depends_on: [preview, assemble, generation_quality, activation_eval]
+      depends_on: [preview, assemble, generation_quality, activation_eval, bundle_assets]
       when: "'route: meta-skill' in (outputs.clarify_intent | lower) and outputs.creator_mode != 'PREVIEW_ONLY' and outputs.creator_mode != 'PATCH_PROPOSAL' and outputs.creator_mode != 'BENCHMARK'"
       tool: meta_skill_persist_proposal
       tool_args:
@@ -721,6 +764,7 @@ composition:
         risk_result: "{{ outputs.risk_classify }}"
         generation_quality_result: "{{ outputs.generation_quality }}"
         activation_result: "{{ outputs.activation_eval }}"
+        bundle_files_json: "{{ outputs.bundle_assets }}"
 
     - id: final_response
       label: "最终回复"

@@ -57,6 +57,28 @@ def test_write_proposal_creates_directory(tmp_path: Path) -> None:
     assert gates["auto_enable_eligible"] is True
 
 
+def test_write_proposal_accepts_bundle_files_json(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    out = _run(
+        "write_proposal", home=home,
+        skill_md_inline=SAMPLE_SKILL_MD,
+        lint_result=json.dumps({"G1": {"passed": True}, "G2": {"passed": True}}),
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+        bundle_files_json=json.dumps({
+            "scripts/render.py": "print('ok')\n",
+            "evals/smoke.json": '{"prompt": "run synth"}\n',
+        }),
+    )
+
+    proposal_dir = home / "proposals" / out["proposal_id"]
+    assert (proposal_dir / "scripts" / "render.py").read_text(encoding="utf-8") == (
+        "print('ok')\n"
+    )
+    manifest = json.loads((proposal_dir / "bundle.json").read_text(encoding="utf-8"))
+    assert manifest["kind"] == "skill_bundle"
+    assert manifest["files"] == ["evals/smoke.json", "scripts/render.py"]
+
+
 def test_write_proposal_marks_ineligible_on_g3_fail(tmp_path: Path) -> None:
     home = tmp_path / ".opensquilla"
     out = _run(

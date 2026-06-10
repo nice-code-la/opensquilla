@@ -296,6 +296,28 @@ def test_creator_dag_forwards_optional_draft_seed_to_fill_slots() -> None:
     assert "activation_result" in steps["persist"].tool_args
 
 
+def test_creator_dag_generates_optional_bundle_assets_before_persist() -> None:
+    from opensquilla.skills.loader import SkillLoader
+
+    spec = SkillLoader(bundled_dir=BUNDLED).get_by_name("meta-skill-creator")
+    assert spec is not None
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    bundle_assets = steps["bundle_assets"]
+    assert bundle_assets.kind == "llm_chat"
+    assert bundle_assets.depends_on == ("assemble", "generation_quality")
+    assert "outputs.creator_mode != 'PATCH_PROPOSAL'" in bundle_assets.when
+    assert "Return only a JSON object" in str(bundle_assets.with_args["task"])
+    assert "scripts/" in str(bundle_assets.with_args["task"])
+    assert "evals/" in str(bundle_assets.with_args["task"])
+
+    persist = steps["persist"]
+    assert "bundle_assets" in persist.depends_on
+    assert persist.tool_args["bundle_files_json"] == "{{ outputs.bundle_assets }}"
+
+
 def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
     loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
     loader.invalidate_cache()

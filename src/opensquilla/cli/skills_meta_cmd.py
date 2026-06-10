@@ -671,28 +671,8 @@ def proposals_cmd(
 
     from opensquilla.skills import proposals_lib
 
-    proposals_dir = _proposals_dir()
-
     if action == "list":
-        rows: list[dict[str, Any]] = []
-        if proposals_dir.is_dir():
-            for sub in sorted(proposals_dir.iterdir()):
-                if not sub.is_dir():
-                    continue
-                gates_path = sub / "gates.json"
-                gates: dict[str, Any] = {}
-                if gates_path.is_file():
-                    try:
-                        gates = _json.loads(gates_path.read_text())
-                    except _json.JSONDecodeError:
-                        gates = {}
-                rows.append({
-                    "proposal_id": sub.name,
-                    "auto_enable_eligible": bool(
-                        gates.get("auto_enable_eligible", False),
-                    ),
-                    "skill_md_present": (sub / "SKILL.md").is_file(),
-                })
+        rows = proposals_lib.list_proposals(_proposals_home())["proposals"]
         if json_out:
             typer.echo(_json.dumps({"proposals": rows}, indent=2))
             return
@@ -702,10 +682,12 @@ def proposals_cmd(
         typer.echo(f"{'PROPOSAL_ID':12} ELIGIBLE  SKILL_MD")
         typer.echo("-" * 40)
         for r in rows:
+            bundle_count = int(r.get("bundle_file_count") or 0)
             typer.echo(
                 f"{r['proposal_id']:12} "
                 f"{('yes' if r['auto_enable_eligible'] else 'no'):8}  "
-                f"{'present' if r['skill_md_present'] else 'MISSING'}"
+                f"present"
+                + (f"  bundle:{bundle_count}" if bundle_count else "")
             )
         return
 
@@ -735,29 +717,25 @@ def proposals_cmd(
         )
         raise typer.Exit(2)
 
-    src = proposals_dir / (proposal_id or "")
-
     if action == "show":
-        if not (src / "SKILL.md").is_file():
+        shown = proposals_lib.show_proposal(_proposals_home(), proposal_id or "")
+        if shown.get("status") != "ok":
             typer.echo(f"Error: proposal {proposal_id} not found", err=True)
             raise typer.Exit(1)
-        gates_text = ""
-        if (src / "gates.json").is_file():
-            gates_text = (src / "gates.json").read_text()
-        skill_md = (src / "SKILL.md").read_text(encoding="utf-8")
         if json_out:
-            typer.echo(_json.dumps({
-                "proposal_id": proposal_id,
-                "skill_md": skill_md,
-                "gates": _json.loads(gates_text) if gates_text else {},
-            }, indent=2))
+            typer.echo(_json.dumps(shown, indent=2))
             return
         typer.echo(f"=== Proposal {proposal_id} ===")
-        if gates_text:
+        gates = shown.get("gates")
+        if isinstance(gates, dict) and gates:
             typer.echo("\n-- gates.json --")
-            typer.echo(gates_text)
+            typer.echo(_json.dumps(gates, indent=2))
+        bundle = shown.get("bundle")
+        if isinstance(bundle, dict) and bundle:
+            typer.echo("\n-- bundle.json --")
+            typer.echo(_json.dumps(bundle, indent=2))
         typer.echo("\n-- SKILL.md --")
-        typer.echo(skill_md)
+        typer.echo(str(shown.get("skill_md") or ""))
         return
 
     if action == "patch":

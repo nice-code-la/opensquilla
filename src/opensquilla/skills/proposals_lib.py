@@ -23,7 +23,7 @@ import subprocess
 import sys
 import uuid
 from copy import deepcopy
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -72,6 +72,8 @@ _PATCH_STALE_GATES = (
     "activation_eval",
     "runtime_e2e",
 )
+_BUNDLE_MANIFEST = "bundle.json"
+_RESERVED_PROPOSAL_FILES = frozenset({"SKILL.md", "gates.json", _BUNDLE_MANIFEST})
 
 
 def proposals_dir(home: Path) -> Path:
@@ -90,6 +92,93 @@ def rollback_dir(home: Path) -> Path:
     return home / "rollback"
 
 
+def _bundle_manifest(files: dict[str, str]) -> dict:
+    return {
+        "version": 1,
+        "kind": "skill_bundle",
+        "entrypoint": "SKILL.md",
+        "files": sorted(files),
+    }
+
+
+def _normalise_bundle_files(bundle_files: object) -> dict[str, str]:
+    if bundle_files in (None, ""):
+        return {}
+    if not isinstance(bundle_files, dict):
+        raise ValueError("invalid_bundle_files")
+    normalised: dict[str, str] = {}
+    for raw_path, content in bundle_files.items():
+        if not isinstance(raw_path, str):
+            raise ValueError("invalid_bundle_path")
+        rel = raw_path.strip()
+        path = PurePosixPath(rel)
+        if (
+            not rel
+            or "\\" in rel
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or str(path) in _RESERVED_PROPOSAL_FILES
+        ):
+            raise ValueError(f"invalid_bundle_path:{raw_path}")
+        if not isinstance(content, str):
+            raise ValueError(f"invalid_bundle_content:{raw_path}")
+        normalised[str(path)] = content
+    return normalised
+
+
+def _write_bundle_files(root: Path, bundle_files: dict[str, str]) -> dict:
+    if not bundle_files:
+        return {}
+    manifest = _bundle_manifest(bundle_files)
+    for rel_path, content in bundle_files.items():
+        target = root / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    (root / _BUNDLE_MANIFEST).write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def _read_bundle_manifest(root: Path) -> dict:
+    path = root / _BUNDLE_MANIFEST
+    if not path.is_file():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    files = parsed.get("files")
+    if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
+        return {}
+    return {
+        "version": parsed.get("version", 1),
+        "kind": parsed.get("kind", "skill_bundle"),
+        "entrypoint": parsed.get("entrypoint", "SKILL.md"),
+        "files": list(files),
+    }
+
+
+def _read_bundle_files(root: Path) -> dict[str, str]:
+    manifest = _read_bundle_manifest(root)
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        return {}
+    out: dict[str, str] = {}
+    for rel_path in files:
+        try:
+            safe = _normalise_bundle_files({rel_path: ""})
+        except ValueError:
+            continue
+        path = root / next(iter(safe))
+        if path.is_file():
+            out[rel_path] = path.read_text(encoding="utf-8")
+    return out
+
+
 def is_valid_proposal_id(proposal_id: str | None) -> bool:
     if not proposal_id:
         return False
@@ -97,7 +186,11 @@ def is_valid_proposal_id(proposal_id: str | None) -> bool:
 
 
 def atomic_write_proposal(
-    home: Path, skill_md: str, gates: dict,
+    home: Path,
+    skill_md: str,
+    gates: dict,
+    *,
+    bundle_files: dict[str, str] | None = None,
 ) -> str:
     """Materialise a proposal directory atomically.
 
@@ -118,6 +211,7 @@ def atomic_write_proposal(
         json.dumps(gates, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    _write_bundle_files(tmp_dir, bundle_files or {})
 
     final_dir = proposals / proposal_id
     tmp_dir.rename(final_dir)
@@ -470,8 +564,13 @@ def write_proposal(
     risk_result: object = None,
     generation_quality_result: object = None,
     activation_result: object = None,
+    bundle_files: object = None,
 ) -> dict:
     """Atomic write + return the standard ``{status, proposal_id, ...}`` shape."""
+    try:
+        normalised_bundle_files = _normalise_bundle_files(bundle_files)
+    except ValueError as exc:
+        return {"status": "refused", "reason": str(exc)}
     mode = (creator_mode or "").strip().upper()
     acceptance_gate = _evaluate_acceptance_compare(creator_mode, acceptance_result)
     runtime_gate = _evaluate_runtime_e2e(creator_mode, runtime_e2e_result)
@@ -525,11 +624,19 @@ def write_proposal(
         "activation_eval": activation_gate,
         "auto_enable_eligible": eligible,
     }
-    proposal_id = atomic_write_proposal(home, skill_md, gates)
+    if normalised_bundle_files:
+        gates["bundle"] = _bundle_manifest(normalised_bundle_files)
+    proposal_id = atomic_write_proposal(
+        home,
+        skill_md,
+        gates,
+        bundle_files=normalised_bundle_files,
+    )
     return {
         "status": "ok",
         "proposal_id": proposal_id,
         "auto_enable_eligible": eligible,
+        "bundle": gates.get("bundle", {}),
     }
 
 
@@ -575,12 +682,15 @@ def list_proposals(home: Path) -> dict:
                 gates = {}
         provenance = gates.get("provenance") or {}
         auto_enable_digest = auto_enable_audit_from_gates(gates)
+        bundle = _read_bundle_manifest(sub)
         rows.append({
             "proposal_id": sub.name,
             "auto_enable_eligible": bool(gates.get("auto_enable_eligible", False)),
             "triggered_by": provenance.get("triggered_by", "manual"),
             "chain_hash": provenance.get("chain_hash"),
             "auto_enable": auto_enable_digest,
+            "bundle": bundle,
+            "bundle_file_count": len(bundle.get("files", [])),
         })
     return {"proposals": rows}
 
@@ -613,11 +723,14 @@ def show_proposal(home: Path, proposal_id: str) -> dict:
             gates = json.loads(gates_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             gates = {}
+    bundle = _read_bundle_manifest(sub)
     return {
         "status": "ok",
         "proposal_id": proposal_id,
         "skill_md": skill_md,
         "gates": gates,
+        "bundle": bundle,
+        "bundle_files": _read_bundle_files(sub),
         "auto_enable_audit": auto_enable_audit_from_gates(gates),
     }
 
@@ -902,6 +1015,7 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
             parent_gates = json.loads(gates_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             parent_gates = {}
+    bundle_files = _read_bundle_files(parent_dir)
 
     try:
         frontmatter, body = _split_skill_markdown(parent_skill_md)
@@ -925,6 +1039,8 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
         "lint": _lint_revised_skill(revised_skill_md),
         "auto_enable_eligible": False,
     }
+    if bundle_files:
+        gates["bundle"] = _bundle_manifest(bundle_files)
     for gate_name in _PATCH_STALE_GATES:
         gates[gate_name] = _stale_gate(
             gate_name,
@@ -932,7 +1048,12 @@ def patch_proposal(home: Path, proposal_id: str, patch_request: dict) -> dict:
             required=(gate_name == "smoke"),
         )
 
-    child_id = atomic_write_proposal(home, revised_skill_md, gates)
+    child_id = atomic_write_proposal(
+        home,
+        revised_skill_md,
+        gates,
+        bundle_files=bundle_files,
+    )
     return {
         "status": "ok",
         "proposal_id": child_id,

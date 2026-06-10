@@ -984,6 +984,7 @@ def meta_skill_persist_proposal(
     risk_result: str = "",
     generation_quality_result: str = "",
     activation_result: str = "",
+    bundle_files_json: str = "",
     auto_enable_manual: bool = True,
 ) -> str:
     """Write a proposal candidate to ~/.opensquilla/proposals/<id>/. Returns JSON."""
@@ -1001,6 +1002,8 @@ def meta_skill_persist_proposal(
             "--risk-result", risk_result,
             "--generation-quality-result", generation_quality_result,
             "--activation-result", activation_result]
+    if bundle_files_json:
+        args.extend(["--bundle-files-json", bundle_files_json])
     if home:
         args.extend(["--home", home])
     proc = subprocess.run(args, capture_output=True, text=True, check=False)
@@ -1408,6 +1411,7 @@ async def meta_skill_runtime_e2e_run_tool(
         "risk_result": {"type": "string"},
         "generation_quality_result": {"type": "string"},
         "activation_result": {"type": "string"},
+        "bundle_files_json": {"type": "string"},
         "auto_enable_manual": {"type": "boolean"},
         "home": {"type": "string"},
     },
@@ -1426,6 +1430,7 @@ async def meta_skill_persist_proposal_tool(
     risk_result: str = "",
     generation_quality_result: str = "",
     activation_result: str = "",
+    bundle_files_json: str = "",
     auto_enable_manual: bool = True,
 ) -> str:
     import asyncio
@@ -1442,6 +1447,7 @@ async def meta_skill_persist_proposal_tool(
         risk_result=risk_result,
         generation_quality_result=generation_quality_result,
         activation_result=activation_result,
+        bundle_files_json=bundle_files_json,
         auto_enable_manual=auto_enable_manual,
     )
 
