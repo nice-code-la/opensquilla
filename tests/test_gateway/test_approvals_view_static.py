@@ -58,6 +58,16 @@ def test_approval_card_metadata_wraps_long_runtime_identifiers() -> None:
     assert "overflow-wrap: anywhere" in code_rule
 
 
+def test_approval_card_title_prefers_summary_over_tool_name() -> None:
+    js = APPROVALS_JS.read_text(encoding="utf-8")
+
+    assert (
+        "const title = item.summary || item.toolName || item.pluginId || item.actionKind || 'Unknown';"
+        in js
+    )
+    assert '<span class="ap-card__name">${_esc(title)}</span>' in js
+
+
 def test_approvals_view_separates_strategy_from_effective_execution_mode() -> None:
     js = APPROVALS_JS.read_text(encoding="utf-8")
 

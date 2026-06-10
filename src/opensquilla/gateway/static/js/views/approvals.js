@@ -247,14 +247,14 @@ const ApprovalsView = (() => {
   }
 
   function _renderApproval(item) {
-    const toolName = item.toolName || item.pluginId || item.actionKind || 'Unknown';
+    const title = item.summary || item.toolName || item.pluginId || item.actionKind || 'Unknown';
     const command = _approvalCommand(item);
     const detail = _approvalDetail(item);
     const canAlways = item.namespace === 'exec' && !!command;
     return `<article class="ap-card">
       <header class="ap-card__head">
         <div class="ap-card__title-row">
-          <span class="ap-card__name">${_esc(toolName)}</span>
+          <span class="ap-card__name">${_esc(title)}</span>
           ${item.namespace ? `<span class="ap-pill ap-pill--ns">${_esc(item.namespace)}</span>` : ''}
         </div>
         <span class="ap-card__time">awaiting decision</span>
