@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from copy import deepcopy
 from pathlib import Path, PurePosixPath
@@ -31,6 +32,18 @@ import yaml
 PROPOSAL_ID_PATTERN = re.compile(r"[0-9a-f]{8}")
 SKILL_NAME_PATTERN = re.compile(r"[\w\-]+")
 RISK_LEVELS = frozenset({"low", "medium", "high"})
+_CREATOR_LEARNING_EVENT_TYPES = frozenset({"accepted", "benchmarked", "rolled_back"})
+_CREATOR_LEARNING_STRING_FIELDS = (
+    "outcome",
+    "reason",
+    "source",
+)
+_CREATOR_LEARNING_PROPOSAL_FIELDS = (
+    "proposal_id",
+    "baseline_proposal_id",
+    "candidate_proposal_id",
+    "restored_proposal_id",
+)
 _NO_REQUIRED_IMPROVEMENTS = frozenset({"", "none", "no", "n/a", "not applicable"})
 _CREATOR_QUALITY_REQUIRED_MODES = frozenset({
     "FULL_GATED",
@@ -93,6 +106,14 @@ def benchmarks_dir(home: Path) -> Path:
 
 def rollback_dir(home: Path) -> Path:
     return home / "rollback"
+
+
+def creator_learning_dir(home: Path) -> Path:
+    return home / "creator-learning"
+
+
+def creator_learning_events_path(home: Path) -> Path:
+    return creator_learning_dir(home) / "events.jsonl"
 
 
 def _bundle_manifest(files: dict[str, str]) -> dict:
@@ -1658,6 +1679,17 @@ def benchmark_proposals(
         "auto_enable_eligible": False,
     }
     benchmark_id = atomic_write_benchmark(home, report)
+    _safe_record_creator_learning_event(
+        home,
+        {
+            "event_type": "benchmarked",
+            "benchmark_id": benchmark_id,
+            "baseline_proposal_id": baseline_proposal_id,
+            "candidate_proposal_id": candidate_proposal_id,
+            "passed": benchmark_gate["passed"],
+            "reason": benchmark_gate.get("reason", ""),
+        },
+    )
     return {
         "status": "ok",
         "benchmark_id": benchmark_id,
@@ -1888,6 +1920,16 @@ def accept_proposal(
         result["deprecates"] = deprecated_names
     if migration_notes_text:
         result["migration_notes"] = migration_notes_text
+    _safe_record_creator_learning_event(
+        home,
+        {
+            "event_type": "accepted",
+            "proposal_id": proposal_id,
+            "skill_name": name,
+            "outcome": "accepted",
+            "reason": "replace" if replace else "accept",
+        },
+    )
     return result
 
 
@@ -2016,13 +2058,24 @@ def rollback_skill(home: Path, name: str) -> dict:
         json.dumps(restored_gates, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    return {
+    result = {
         "status": "ok",
         "name": name,
         "restored_proposal_id": target_proposal_id,
         "skill_path": str(current),
         "archived_current": archived_current,
     }
+    _safe_record_creator_learning_event(
+        home,
+        {
+            "event_type": "rolled_back",
+            "skill_name": name,
+            "restored_proposal_id": target_proposal_id,
+            "proposal_id": current_proposal_id,
+            "reason": "rollback",
+        },
+    )
+    return result
 
 
 def reject_proposal(home: Path, proposal_id: str) -> dict:
@@ -2039,6 +2092,84 @@ def reject_proposal(home: Path, proposal_id: str) -> dict:
         return {"status": "error", "reason": f"proposal {proposal_id} not found"}
     shutil.rmtree(target)
     return {"status": "ok", "proposal_id": proposal_id}
+
+
+def _learning_text(value: object, *, max_chars: int = 300) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:max_chars]
+
+
+def _learning_lessons(value: object) -> list[str]:
+    if isinstance(value, str):
+        raw_items: list[object] = [value]
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        return []
+    lessons: list[str] = []
+    for item in raw_items:
+        text = _learning_text(item)
+        if text and text not in lessons:
+            lessons.append(text)
+        if len(lessons) >= 5:
+            break
+    return lessons
+
+
+def _sanitize_creator_learning_event(event: object) -> dict | None:
+    if not isinstance(event, dict):
+        return None
+    event_type = _learning_text(event.get("event_type") or event.get("type"), max_chars=80)
+    if event_type not in _CREATOR_LEARNING_EVENT_TYPES:
+        return None
+    out: dict[str, object] = {
+        "event_type": event_type,
+        "recorded_at_ms": int(time.time() * 1000),
+    }
+    for field in _CREATOR_LEARNING_PROPOSAL_FIELDS:
+        value = _learning_text(event.get(field), max_chars=32)
+        if is_valid_proposal_id(value):
+            out[field] = value
+    benchmark_id = _learning_text(event.get("benchmark_id"), max_chars=32)
+    if is_valid_proposal_id(benchmark_id):
+        out["benchmark_id"] = benchmark_id
+    skill_name = _learning_text(event.get("skill_name"), max_chars=80)
+    if skill_name and SKILL_NAME_PATTERN.fullmatch(skill_name):
+        out["skill_name"] = skill_name
+    for field in _CREATOR_LEARNING_STRING_FIELDS:
+        value = _learning_text(event.get(field))
+        if value:
+            out[field] = value
+    if isinstance(event.get("passed"), bool):
+        out["passed"] = bool(event["passed"])
+    lessons = _learning_lessons(event.get("lessons"))
+    if lessons:
+        out["lessons"] = lessons
+    return out
+
+
+def record_creator_learning_event(home: Path, event: object) -> dict:
+    """Append a compact sanitized creator learning event to JSONL memory."""
+    sanitized = _sanitize_creator_learning_event(event)
+    if sanitized is None:
+        return {"status": "refused", "reason": "invalid_event_type"}
+    path = creator_learning_events_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(sanitized, ensure_ascii=False, separators=(",", ":")))
+        fh.write("\n")
+    return {
+        "status": "ok",
+        "path": str(path),
+        "event": sanitized,
+    }
+
+
+def _safe_record_creator_learning_event(home: Path, event: object) -> None:
+    try:
+        record_creator_learning_event(home, event)
+    except OSError:
+        return
 
 
 # ─── Auto-propose settings (Path 1/2 runtime toggle) ──────────────────
@@ -2102,6 +2233,8 @@ __all__ = [
     "audit_proposal_drift",
     "auto_enable_audit_from_gates",
     "auto_propose_settings_path",
+    "creator_learning_dir",
+    "creator_learning_events_path",
     "disable_auto_enabled_skill",
     "is_valid_proposal_id",
     "list_auto_enabled_skills",
@@ -2110,6 +2243,7 @@ __all__ = [
     "pending_count",
     "proposals_dir",
     "read_auto_propose_settings",
+    "record_creator_learning_event",
     "refresh_proposal_gates",
     "reject_proposal",
     "rollback_dir",

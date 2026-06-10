@@ -152,6 +152,65 @@ def test_audit_proposal_drift_reports_stale_collision_and_rollback_heavy(
     assert rollback_heavy["rollback_count"] == 2
 
 
+def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+
+    accepted = proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "accepted",
+            "proposal_id": "abcd1234",
+            "skill_name": "learn-skill",
+            "outcome": "accepted after review\nwith newline",
+            "lessons": ["keep trigger narrow\nplease", "x" * 400],
+            "secret": "must not be persisted",
+        },
+    )
+    benchmarked = proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "benchmarked",
+            "baseline_proposal_id": "abcd1234",
+            "candidate_proposal_id": "deadbeef",
+            "benchmark_id": "01234567",
+            "passed": True,
+            "lessons": ["candidate won on groundedness"],
+        },
+    )
+    rolled_back = proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "rolled_back",
+            "skill_name": "learn-skill",
+            "restored_proposal_id": "deadbeef",
+            "reason": "overbroad trigger",
+        },
+    )
+    invalid = proposals_lib.record_creator_learning_event(
+        home,
+        {"event_type": "unknown", "proposal_id": "abcd1234"},
+    )
+
+    assert accepted["status"] == "ok"
+    assert benchmarked["status"] == "ok"
+    assert rolled_back["status"] == "ok"
+    assert invalid == {"status": "refused", "reason": "invalid_event_type"}
+    path = home / "creator-learning" / "events.jsonl"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert [row["event_type"] for row in rows] == [
+        "accepted",
+        "benchmarked",
+        "rolled_back",
+    ]
+    assert rows[0]["outcome"] == "accepted after review with newline"
+    assert rows[0]["lessons"][0] == "keep trigger narrow please"
+    assert len(rows[0]["lessons"][1]) == 300
+    assert "secret" not in rows[0]
+    assert isinstance(rows[0]["recorded_at_ms"], int)
+    assert rows[1]["passed"] is True
+    assert rows[2]["restored_proposal_id"] == "deadbeef"
+
+
 def test_pending_count_on_empty_home(tmp_path: Path) -> None:
     home = tmp_path / "empty"
     assert proposals_lib.pending_count(home) == {"count": 0}

@@ -432,6 +432,12 @@ composition:
           Clarified intent:
           {{ outputs.clarify_intent | truncate(1000) }}
 
+          Creator learning summary (optional advisory memory):
+          {{ inputs.creator_learning_summary | default("") | xml_escape | truncate(2000) }}
+          Treat this as advisory memory from prior accepted, benchmarked, or
+          rolled-back proposals. It may suggest failure patterns or successful
+          shapes, but current user requirements and gates still win.
+
           Conditional visibility guidance:
           If the user request or draft seed explicitly names required toolsets,
           fallback tools, supported platforms, or config keys, preserve those as

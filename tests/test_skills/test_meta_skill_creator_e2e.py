@@ -314,6 +314,24 @@ def test_creator_dag_forwards_conditional_visibility_guidance_to_fill_slots() ->
     assert "Do not invent conditional visibility fields" in fill_slots_intent
 
 
+def test_creator_dag_forwards_optional_learning_summary_to_fill_slots() -> None:
+    from opensquilla.skills.loader import SkillLoader
+
+    spec = SkillLoader(bundled_dir=BUNDLED).get_by_name("meta-skill-creator")
+    assert spec is not None
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    fill_slots_intent = str(steps["fill_slots"].tool_args["user_intent"])
+    assert "Creator learning summary" in fill_slots_intent
+    assert (
+        '{{ inputs.creator_learning_summary | default("") | xml_escape | truncate(2000) }}'
+        in fill_slots_intent
+    )
+    assert "advisory memory" in fill_slots_intent
+
+
 def test_creator_dag_generates_optional_bundle_assets_before_persist() -> None:
     from opensquilla.skills.loader import SkillLoader
 
