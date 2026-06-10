@@ -572,3 +572,53 @@ composition:
     assert "Original CLI replacement target" in (
         tmp_path / "skills" / "cli-replace-target" / "SKILL.md"
     ).read_text(encoding="utf-8")
+
+
+def test_proposals_audit_cli_reports_drift_issues(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENSQUILLA_STATE_DIR", str(tmp_path))
+    skill_md = """---
+name: cli-audit-alpha
+description: "CLI audit proposal"
+kind: meta
+triggers:
+  - "cli audit shared"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message | xml_escape | truncate(512) }}"
+---
+"""
+    first = proposals_lib.write_proposal(
+        tmp_path,
+        skill_md,
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    second = proposals_lib.write_proposal(
+        tmp_path,
+        skill_md.replace("cli-audit-alpha", "cli-audit-beta"),
+        {"G1": {"passed": True}, "G2": {"passed": True}},
+        {"G3": {"passed": True}, "G4": {"passed": True}},
+    )
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+
+    audited = runner.invoke(
+        cli_app,
+        ["skills", "meta", "proposals", "audit", "--json"],
+    )
+
+    assert audited.exit_code == 0, audited.output
+    payload = json.loads(audited.output)
+    assert payload["status"] == "ok"
+    assert any(
+        issue["type"] == "pending_trigger_collision"
+        and issue["trigger"] == "cli audit shared"
+        for issue in payload["issues"]
+    )

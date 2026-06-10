@@ -46,6 +46,24 @@ def _seed_proposal(home: Path, *, eligible: bool = True) -> str:
     return result["proposal_id"]
 
 
+def _skill_md(name: str, trigger: str, description: str = "Synthetic proposal") -> str:
+    return f"""---
+name: {name}
+description: "{description}"
+kind: meta
+meta_priority: 50
+triggers:
+  - "{trigger}"
+composition:
+  steps:
+    - id: a
+      skill: summarize
+      with:
+        task: "{{{{ inputs.user_message }}}}"
+---
+"""
+
+
 def test_is_valid_proposal_id() -> None:
     assert proposals_lib.is_valid_proposal_id("abcd1234") is True
     assert proposals_lib.is_valid_proposal_id("ABCD1234") is False  # uppercase rejected
@@ -63,6 +81,75 @@ def test_write_then_list_then_pending_count(tmp_path: Path) -> None:
     assert sorted(r["proposal_id"] for r in rows) == sorted([pid1, pid2])
     assert all(r["auto_enable_eligible"] for r in rows)
     assert proposals_lib.pending_count(home) == {"count": 2}
+
+
+def test_audit_proposal_drift_reports_stale_collision_and_rollback_heavy(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    parent = proposals_lib.write_proposal(
+        home,
+        _skill_md("audit-alpha", "audit shared trigger", "Audit alpha proposal"),
+        GATES_PASSING,
+        SMOKE_PASSING,
+    )
+    assert parent["status"] == "ok"
+    sibling = proposals_lib.write_proposal(
+        home,
+        _skill_md("audit-beta", "audit shared trigger", "Audit beta proposal"),
+        GATES_PASSING,
+        SMOKE_PASSING,
+    )
+    assert sibling["status"] == "ok"
+    patched = proposals_lib.patch_proposal(
+        home,
+        parent["proposal_id"],
+        {"set_description": "Audit alpha revised proposal."},
+    )
+    assert patched["status"] == "ok"
+
+    managed = home / "skills" / "audit-alpha"
+    managed.mkdir(parents=True)
+    (managed / "SKILL.md").write_text(
+        _skill_md("audit-alpha", "audit active trigger"),
+        encoding="utf-8",
+    )
+    for idx in range(2):
+        archived = home / "rollback" / "audit-alpha" / f"archive{idx}"
+        archived.mkdir(parents=True)
+        (archived / "SKILL.md").write_text(
+            _skill_md("audit-alpha", f"audit archived trigger {idx}"),
+            encoding="utf-8",
+        )
+
+    audit = proposals_lib.audit_proposal_drift(home)
+
+    assert audit["status"] == "ok"
+    issue_types = {issue["type"] for issue in audit["issues"]}
+    assert "stale_proposal" in issue_types
+    assert "pending_trigger_collision" in issue_types
+    assert "rollback_heavy_skill" in issue_types
+    stale = [
+        issue for issue in audit["issues"]
+        if issue["type"] == "stale_proposal"
+    ][0]
+    assert stale["proposal_id"] == patched["proposal_id"]
+    collision = [
+        issue for issue in audit["issues"]
+        if issue["type"] == "pending_trigger_collision"
+    ][0]
+    assert collision["trigger"] == "audit shared trigger"
+    assert sorted(collision["proposal_ids"]) == sorted([
+        parent["proposal_id"],
+        sibling["proposal_id"],
+        patched["proposal_id"],
+    ])
+    rollback_heavy = [
+        issue for issue in audit["issues"]
+        if issue["type"] == "rollback_heavy_skill"
+    ][0]
+    assert rollback_heavy["skill_name"] == "audit-alpha"
+    assert rollback_heavy["rollback_count"] == 2
 
 
 def test_pending_count_on_empty_home(tmp_path: Path) -> None:

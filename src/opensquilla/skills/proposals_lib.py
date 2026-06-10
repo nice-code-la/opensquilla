@@ -798,6 +798,139 @@ def pending_count(home: Path) -> dict:
     return {"count": count}
 
 
+def _proposal_triggers(skill_md: str) -> tuple[str, list[str]]:
+    try:
+        frontmatter, _body = _split_skill_markdown(skill_md)
+    except (ValueError, yaml.YAMLError):
+        return ("", [])
+    name = str(frontmatter.get("name") or "").strip()
+    raw_triggers = frontmatter.get("triggers")
+    if isinstance(raw_triggers, list):
+        triggers = [str(item).strip() for item in raw_triggers if str(item).strip()]
+    elif isinstance(raw_triggers, str) and raw_triggers.strip():
+        triggers = [raw_triggers.strip()]
+    else:
+        triggers = []
+    return (name, triggers)
+
+
+def _normalise_trigger_key(trigger: str) -> str:
+    return " ".join(trigger.casefold().split())
+
+
+def _stale_gate_names(gates: dict) -> list[str]:
+    return sorted(
+        name for name, value in gates.items()
+        if isinstance(value, dict) and value.get("stale") is True
+    )
+
+
+def audit_proposal_drift(home: Path, *, rollback_heavy_threshold: int = 2) -> dict:
+    """Return a deterministic read-only drift report for proposal maintenance."""
+    issues: list[dict] = []
+    proposal_records: list[dict] = []
+    proposals = proposals_dir(home)
+    if proposals.is_dir():
+        for sub in sorted(proposals.iterdir()):
+            skill_path = sub / "SKILL.md"
+            if not skill_path.is_file():
+                continue
+            gates = _read_gates(sub / "gates.json")
+            skill_md = skill_path.read_text(encoding="utf-8")
+            skill_name, triggers = _proposal_triggers(skill_md)
+            proposal_records.append({
+                "proposal_id": sub.name,
+                "skill_name": skill_name,
+                "triggers": triggers,
+                "gates": gates,
+            })
+            stale_gates = _stale_gate_names(gates)
+            if stale_gates:
+                issues.append({
+                    "type": "stale_proposal",
+                    "severity": "warning",
+                    "proposal_id": sub.name,
+                    "skill_name": skill_name,
+                    "stale_gates": stale_gates,
+                })
+
+    trigger_map: dict[str, dict] = {}
+    for record in proposal_records:
+        for trigger in record["triggers"]:
+            key = _normalise_trigger_key(trigger)
+            if not key:
+                continue
+            bucket = trigger_map.setdefault(
+                key,
+                {
+                    "trigger": trigger,
+                    "proposal_ids": [],
+                    "skill_names": [],
+                },
+            )
+            bucket["proposal_ids"].append(record["proposal_id"])
+            if record["skill_name"]:
+                bucket["skill_names"].append(record["skill_name"])
+    for bucket in trigger_map.values():
+        proposal_ids = sorted(set(bucket["proposal_ids"]))
+        if len(proposal_ids) < 2:
+            continue
+        issues.append({
+            "type": "pending_trigger_collision",
+            "severity": "warning",
+            "trigger": bucket["trigger"],
+            "proposal_ids": proposal_ids,
+            "skill_names": sorted(set(bucket["skill_names"])),
+        })
+
+    managed = skills_dir(home)
+    rollbacks = rollback_dir(home)
+    if managed.is_dir():
+        for sub in sorted(managed.iterdir()):
+            if not (sub / "SKILL.md").is_file():
+                continue
+            history_root = rollbacks / sub.name
+            rollback_count = 0
+            if history_root.is_dir():
+                rollback_count = sum(
+                    1 for archive in history_root.iterdir()
+                    if (archive / "SKILL.md").is_file()
+                )
+            if rollback_count >= rollback_heavy_threshold:
+                issues.append({
+                    "type": "rollback_heavy_skill",
+                    "severity": "warning",
+                    "skill_name": sub.name,
+                    "rollback_count": rollback_count,
+                    "threshold": rollback_heavy_threshold,
+                })
+
+    counts = {
+        "pending_proposals": len(proposal_records),
+        "stale_proposals": sum(1 for issue in issues if issue["type"] == "stale_proposal"),
+        "pending_trigger_collisions": sum(
+            1 for issue in issues
+            if issue["type"] == "pending_trigger_collision"
+        ),
+        "rollback_heavy_skills": sum(
+            1 for issue in issues
+            if issue["type"] == "rollback_heavy_skill"
+        ),
+    }
+    return {
+        "status": "ok",
+        "counts": counts,
+        "issues": sorted(
+            issues,
+            key=lambda issue: (
+                str(issue.get("type") or ""),
+                str(issue.get("proposal_id") or issue.get("skill_name") or ""),
+                str(issue.get("trigger") or ""),
+            ),
+        ),
+    }
+
+
 def show_proposal(home: Path, proposal_id: str) -> dict:
     """Full payload for one proposal: SKILL.md text + gates.json."""
     if not is_valid_proposal_id(proposal_id):
@@ -1966,6 +2099,7 @@ __all__ = [
     "PROPOSAL_ID_PATTERN",
     "atomic_write_proposal",
     "accept_proposal",
+    "audit_proposal_drift",
     "auto_enable_audit_from_gates",
     "auto_propose_settings_path",
     "disable_auto_enabled_skill",

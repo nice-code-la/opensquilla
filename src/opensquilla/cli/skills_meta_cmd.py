@@ -627,7 +627,7 @@ def proposals_cmd(
     action: str = typer.Argument(
         ...,
         help=(
-            "list | accept | show | patch | refresh | benchmark | rollback — "
+            "list | accept | show | patch | refresh | benchmark | rollback | audit — "
             "proposal CRUD action"
         ),
     ),
@@ -702,6 +702,7 @@ def proposals_cmd(
     ``proposals refresh <id> --smoke-json '{...}'`` — refresh stale revision gates
     ``proposals benchmark <baseline-id> --candidate-id <id>`` — record A/B report
     ``proposals rollback <skill-name>`` — restore a managed skill's rollback target
+    ``proposals audit``                 — report proposal drift and maintenance issues
     """
     import json as _json
     import re
@@ -726,6 +727,23 @@ def proposals_cmd(
                 f"present"
                 + (f"  bundle:{bundle_count}" if bundle_count else "")
             )
+        return
+
+    if action == "audit":
+        result = proposals_lib.audit_proposal_drift(_proposals_home())
+        if json_out:
+            typer.echo(_json.dumps(result, indent=2))
+            return
+        issues = result.get("issues")
+        if not issues:
+            typer.echo("(no proposal drift issues)")
+            return
+        typer.echo(f"{'TYPE':28} {'TARGET':24} DETAILS")
+        typer.echo("-" * 80)
+        for issue in issues:
+            target = issue.get("proposal_id") or issue.get("skill_name") or ""
+            detail = issue.get("trigger") or ",".join(issue.get("stale_gates", []))
+            typer.echo(f"{issue.get('type', ''):28} {str(target):24.24} {detail}")
         return
 
     if (
