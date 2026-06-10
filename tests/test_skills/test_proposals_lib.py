@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import yaml
@@ -150,6 +151,60 @@ def test_audit_proposal_drift_reports_stale_collision_and_rollback_heavy(
     ][0]
     assert rollback_heavy["skill_name"] == "audit-alpha"
     assert rollback_heavy["rollback_count"] == 2
+
+
+def test_audit_proposal_drift_reports_long_pending_proposals(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposal_id = _seed_proposal(home)
+    now_ms = 1_700_000_000_000
+    old_mtime = (now_ms / 1000) - (21 * 24 * 60 * 60)
+    skill_path = home / "proposals" / proposal_id / "SKILL.md"
+    os.utime(skill_path, (old_mtime, old_mtime))
+
+    audit = proposals_lib.audit_proposal_drift(
+        home,
+        long_pending_days=14,
+        now_ms=now_ms,
+    )
+
+    issue = [
+        item for item in audit["issues"]
+        if item["type"] == "long_pending_proposal"
+    ][0]
+    assert issue["proposal_id"] == proposal_id
+    assert issue["days_pending"] == 21
+    assert issue["threshold_days"] == 14
+    assert audit["counts"]["long_pending_proposals"] == 1
+
+
+def test_audit_proposal_drift_reports_repeated_learning_signals(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    for proposal_id in ("abcd1234", "deadbeef"):
+        proposals_lib.record_creator_learning_event(
+            home,
+            {
+                "event_type": "rolled_back",
+                "proposal_id": proposal_id,
+                "skill_name": "fragile-skill",
+                "reason": "overbroad trigger",
+            },
+        )
+
+    audit = proposals_lib.audit_proposal_drift(home)
+
+    issue = [
+        item for item in audit["issues"]
+        if item["type"] == "repeated_learning_signal"
+    ][0]
+    assert issue["signal"] == "rolled_back"
+    assert issue["skill_name"] == "fragile-skill"
+    assert issue["reason"] == "overbroad trigger"
+    assert issue["event_count"] == 2
+    assert audit["counts"]["repeated_learning_signals"] == 1
 
 
 def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) -> None:

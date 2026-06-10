@@ -846,16 +846,27 @@ def _stale_gate_names(gates: dict) -> list[str]:
     )
 
 
-def audit_proposal_drift(home: Path, *, rollback_heavy_threshold: int = 2) -> dict:
+def audit_proposal_drift(
+    home: Path,
+    *,
+    rollback_heavy_threshold: int = 2,
+    long_pending_days: int = 14,
+    now_ms: int | None = None,
+) -> dict:
     """Return a deterministic read-only drift report for proposal maintenance."""
     issues: list[dict] = []
     proposal_records: list[dict] = []
+    now_seconds = (now_ms / 1000) if now_ms is not None else time.time()
     proposals = proposals_dir(home)
     if proposals.is_dir():
         for sub in sorted(proposals.iterdir()):
             skill_path = sub / "SKILL.md"
             if not skill_path.is_file():
                 continue
+            try:
+                skill_mtime = skill_path.stat().st_mtime
+            except OSError:
+                skill_mtime = now_seconds
             gates = _read_gates(sub / "gates.json")
             skill_md = skill_path.read_text(encoding="utf-8")
             skill_name, triggers = _proposal_triggers(skill_md)
@@ -864,7 +875,18 @@ def audit_proposal_drift(home: Path, *, rollback_heavy_threshold: int = 2) -> di
                 "skill_name": skill_name,
                 "triggers": triggers,
                 "gates": gates,
+                "mtime": skill_mtime,
             })
+            days_pending = max(0, math.floor((now_seconds - skill_mtime) / 86400))
+            if days_pending >= long_pending_days:
+                issues.append({
+                    "type": "long_pending_proposal",
+                    "severity": "warning",
+                    "proposal_id": sub.name,
+                    "skill_name": skill_name,
+                    "days_pending": days_pending,
+                    "threshold_days": long_pending_days,
+                })
             stale_gates = _stale_gate_names(gates)
             if stale_gates:
                 issues.append({
@@ -926,9 +948,50 @@ def audit_proposal_drift(home: Path, *, rollback_heavy_threshold: int = 2) -> di
                     "threshold": rollback_heavy_threshold,
                 })
 
+    learning_buckets: dict[tuple[str, str, str], dict] = {}
+    for event in _read_creator_learning_events(home):
+        signal = _learning_text(event.get("event_type"), max_chars=80)
+        if signal not in {"rolled_back", "failed"}:
+            continue
+        skill_name = _learning_text(event.get("skill_name"), max_chars=80)
+        reason = _learning_text(event.get("reason"))
+        if not skill_name and not reason:
+            continue
+        key = (signal, skill_name, reason)
+        bucket = learning_buckets.setdefault(
+            key,
+            {
+                "signal": signal,
+                "skill_name": skill_name,
+                "reason": reason,
+                "event_count": 0,
+                "proposal_ids": [],
+            },
+        )
+        bucket["event_count"] += 1
+        proposal_id = _learning_text(event.get("proposal_id"), max_chars=32)
+        if is_valid_proposal_id(proposal_id):
+            bucket["proposal_ids"].append(proposal_id)
+    for bucket in learning_buckets.values():
+        if bucket["event_count"] < 2:
+            continue
+        issues.append({
+            "type": "repeated_learning_signal",
+            "severity": "warning",
+            "signal": bucket["signal"],
+            "skill_name": bucket["skill_name"],
+            "reason": bucket["reason"],
+            "event_count": bucket["event_count"],
+            "proposal_ids": sorted(set(bucket["proposal_ids"])),
+        })
+
     counts = {
         "pending_proposals": len(proposal_records),
         "stale_proposals": sum(1 for issue in issues if issue["type"] == "stale_proposal"),
+        "long_pending_proposals": sum(
+            1 for issue in issues
+            if issue["type"] == "long_pending_proposal"
+        ),
         "pending_trigger_collisions": sum(
             1 for issue in issues
             if issue["type"] == "pending_trigger_collision"
@@ -936,6 +999,10 @@ def audit_proposal_drift(home: Path, *, rollback_heavy_threshold: int = 2) -> di
         "rollback_heavy_skills": sum(
             1 for issue in issues
             if issue["type"] == "rollback_heavy_skill"
+        ),
+        "repeated_learning_signals": sum(
+            1 for issue in issues
+            if issue["type"] == "repeated_learning_signal"
         ),
     }
     return {
