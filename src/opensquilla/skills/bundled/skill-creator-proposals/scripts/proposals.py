@@ -82,6 +82,8 @@ def cmd_accept(args: argparse.Namespace) -> dict:
         bool(args.force),
         replace=bool(args.replace),
         owner=args.owner or "",
+        deprecates=args.deprecates or "",
+        migration_notes=args.migration_notes or "",
     )
 
 
@@ -195,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--skill-name", default=None)
     p.add_argument("--force", action="store_true")
     p.add_argument("--replace", nargs="?", const=True, default=False, type=_bool_arg)
+    p.add_argument("--deprecates", default=None)
+    p.add_argument("--migration-notes", default=None)
     p.add_argument("--patch-json", default=None)
     p.add_argument("--patch-file", default=None)
     p.add_argument("--owner", default=None)

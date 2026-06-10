@@ -650,6 +650,12 @@ def proposals_cmd(
     owner: str | None = typer.Option(
         None, "--owner", help="Patch revision owner override",
     ),
+    deprecates: str | None = typer.Option(
+        None, "--deprecates", help="Comma-separated skill names deprecated by accept",
+    ),
+    migration_notes: str | None = typer.Option(
+        None, "--migration-notes", help="Migration notes recorded in lifecycle metadata",
+    ),
     candidate_id: str | None = typer.Option(
         None, "--candidate-id", help="Candidate proposal id for benchmark action",
     ),
@@ -874,6 +880,8 @@ def proposals_cmd(
         force=force,
         replace=replace,
         owner=owner or "",
+        deprecates=deprecates or "",
+        migration_notes=migration_notes or "",
     )
     if result.get("status") != "ok":
         reason = str(result.get("reason") or "proposal accept failed")

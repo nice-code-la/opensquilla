@@ -527,6 +527,10 @@ composition:
             "--replace",
             "--owner",
             "cli-test",
+            "--deprecates",
+            "cli-replace-target,legacy-cli-helper",
+            "--migration-notes",
+            "CLI replacement migration notes.",
             "--json",
         ],
     )
@@ -536,6 +540,12 @@ composition:
     replaced_json = json.loads(replaced.output.strip().splitlines()[-1])
     assert replaced_json["replaced"] is True
     assert replaced_json["rollback_target"]["proposal_id"] == original["proposal_id"]
+    gates = json.loads((tmp_path / "skills" / "cli-replace-target" / "gates.json").read_text())
+    assert gates["lifecycle"]["deprecates"] == [
+        "cli-replace-target",
+        "legacy-cli-helper",
+    ]
+    assert gates["lifecycle"]["migration_notes"] == "CLI replacement migration notes."
 
     rolled_back = runner.invoke(
         cli_app,

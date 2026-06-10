@@ -1471,6 +1471,51 @@ def _merge_lifecycle(gates: dict, lifecycle_patch: dict) -> dict:
     return gates
 
 
+def _normalise_deprecates(value: object) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        raw_items = [str(item).strip() for item in value]
+    else:
+        raise ValueError("invalid_deprecates")
+    names: list[str] = []
+    for item in raw_items:
+        if not item:
+            continue
+        if not SKILL_NAME_PATTERN.fullmatch(item):
+            raise ValueError(f"invalid_deprecates:{item}")
+        if item not in names:
+            names.append(item)
+    return names
+
+
+def _record_archived_deprecation(
+    archive_path: Path,
+    *,
+    skill_name: str,
+    proposal_id: str,
+    owner: str,
+) -> None:
+    gates = _read_gates(archive_path / "gates.json")
+    gates = _merge_lifecycle(
+        gates,
+        {
+            "status": "deprecated",
+            "deprecated_by": {
+                "skill_name": skill_name,
+                "proposal_id": proposal_id,
+                "owner": owner,
+            },
+        },
+    )
+    (archive_path / "gates.json").write_text(
+        json.dumps(gates, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def accept_proposal(
     home: Path,
     proposal_id: str,
@@ -1478,6 +1523,8 @@ def accept_proposal(
     *,
     replace: bool = False,
     owner: str = "",
+    deprecates: object = None,
+    migration_notes: str = "",
 ) -> dict:
     """Promote a proposal to the MANAGED skills layer."""
     if not is_valid_proposal_id(proposal_id):
@@ -1490,6 +1537,11 @@ def accept_proposal(
     src = proposals_dir(home) / proposal_id
     if not (src / "SKILL.md").is_file():
         return {"status": "error", "reason": f"proposal {proposal_id} not found"}
+    try:
+        deprecated_names = _normalise_deprecates(deprecates)
+    except ValueError as exc:
+        return {"status": "refused", "reason": str(exc)}
+    migration_notes_text = migration_notes.strip() if isinstance(migration_notes, str) else ""
     gates = _read_gates(src / "gates.json")
     if _contains_stale_gate(gates):
         return {
@@ -1525,32 +1577,48 @@ def accept_proposal(
             proposal_id=existing_proposal_id,
             reason="superseded",
         )
+        _record_archived_deprecation(
+            Path(rollback_target["path"]),
+            skill_name=name,
+            proposal_id=proposal_id,
+            owner=owner,
+        )
+        lifecycle_patch = {
+            "status": "active",
+            "accepted_proposal_id": proposal_id,
+            "owner": owner,
+            "supersedes": {
+                "skill_name": name,
+                "proposal_id": existing_proposal_id,
+                "path": rollback_target["path"],
+            },
+            "rollback_target": rollback_target,
+        }
+        if deprecated_names:
+            lifecycle_patch["deprecates"] = deprecated_names
+        if migration_notes_text:
+            lifecycle_patch["migration_notes"] = migration_notes_text
         gates = _merge_lifecycle(
             gates,
-            {
-                "status": "active",
-                "accepted_proposal_id": proposal_id,
-                "owner": owner,
-                "supersedes": {
-                    "skill_name": name,
-                    "proposal_id": existing_proposal_id,
-                    "path": rollback_target["path"],
-                },
-                "rollback_target": rollback_target,
-            },
+            lifecycle_patch,
         )
         (src / "gates.json").write_text(
             json.dumps(gates, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
     else:
+        lifecycle_patch = {
+            "status": "active",
+            "accepted_proposal_id": proposal_id,
+            "owner": owner,
+        }
+        if deprecated_names:
+            lifecycle_patch["deprecates"] = deprecated_names
+        if migration_notes_text:
+            lifecycle_patch["migration_notes"] = migration_notes_text
         gates = _merge_lifecycle(
             gates,
-            {
-                "status": "active",
-                "accepted_proposal_id": proposal_id,
-                "owner": owner,
-            },
+            lifecycle_patch,
         )
         (src / "gates.json").write_text(
             json.dumps(gates, indent=2, ensure_ascii=False),
@@ -1563,6 +1631,10 @@ def accept_proposal(
     if rollback_target is not None:
         result["replaced"] = True
         result["rollback_target"] = rollback_target
+    if deprecated_names:
+        result["deprecates"] = deprecated_names
+    if migration_notes_text:
+        result["migration_notes"] = migration_notes_text
     return result
 
 

@@ -34,6 +34,10 @@ entrypoint:
     - "{{ with.skill_name | default('') }}"
     - --replace
     - "{{ with.replace | default(false) }}"
+    - --deprecates
+    - "{{ with.deprecates | default('') }}"
+    - --migration-notes
+    - "{{ with.migration_notes | default('') }}"
     - --patch-json
     - "{{ with.patch_json | default('') }}"
     - --patch-file
@@ -70,7 +74,7 @@ CRUD for meta-skill proposal candidates at `~/.opensquilla/proposals/<id>/`.
 - `patch --proposal-id <id> (--patch-json json | --patch-file path) [--owner owner]` — apply an allowlisted structured patch to a pending proposal and write a child revision with stale gates
 - `refresh --proposal-id <id> [--smoke-result json --collision-result text --risk-result text --generation-quality-result json --activation-result json --acceptance-result json --runtime-e2e-result json]` — refresh stale gates on a pending revision and recompute eligibility
 - `benchmark --proposal-id <baseline-id> --candidate-proposal-id <candidate-id> [--eval-prompts json --comparison-result json]` — record a non-promoting A/B report under `~/.opensquilla/proposal-benchmarks/<uuid8>/benchmark.json`, reusing proposal `eval_prompts` when explicit prompts are omitted
-- `accept --proposal-id <id> [--force] [--replace --owner owner]` — move proposal to `~/.opensquilla/skills/<name>/` so it gets loaded by MANAGED layer; refuses if any gate failed (unless `--force`). `--replace` archives the existing managed skill and records `lifecycle.supersedes` plus a rollback target.
+- `accept --proposal-id <id> [--force] [--replace --owner owner --deprecates name[,name] --migration-notes text]` — move proposal to `~/.opensquilla/skills/<name>/` so it gets loaded by MANAGED layer; refuses if any gate failed (unless `--force`). `--replace` archives the existing managed skill and records `lifecycle.supersedes`, deprecation metadata, migration notes, and a rollback target.
 - `rollback --skill-name <name>` — restore a managed skill from its recorded rollback target and archive the current revision
 
 ## Atomicity

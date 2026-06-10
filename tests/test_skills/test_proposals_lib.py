@@ -1049,6 +1049,53 @@ def test_accept_replace_records_supersession_and_rollback_target(
     assert (home / "proposals" / replacement_id).exists() is False
 
 
+def test_accept_replace_records_deprecation_metadata(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    first_id = _seed_proposal(home)
+    first = proposals_lib.accept_proposal(home, first_id)
+    assert first["status"] == "ok"
+    replacement = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD.replace(
+            "Sample synthetic pipeline for proposals_lib tests",
+            "Replacement with migration notes for proposals_lib tests",
+        ),
+        GATES_PASSING,
+        SMOKE_PASSING,
+    )
+
+    out = proposals_lib.accept_proposal(
+        home,
+        replacement["proposal_id"],
+        replace=True,
+        owner="migration-owner",
+        deprecates=["synth-test-pipeline", "legacy-synth-helper"],
+        migration_notes="Use synth-test-pipeline v2 triggers and keep rollback path.",
+    )
+
+    assert out["status"] == "ok"
+    managed_gates = json.loads(
+        (home / "skills" / "synth-test-pipeline" / "gates.json").read_text(),
+    )
+    lifecycle = managed_gates["lifecycle"]
+    assert lifecycle["deprecates"] == [
+        "synth-test-pipeline",
+        "legacy-synth-helper",
+    ]
+    assert lifecycle["migration_notes"] == (
+        "Use synth-test-pipeline v2 triggers and keep rollback path."
+    )
+    archived_gates = json.loads(
+        (Path(out["rollback_target"]["path"]) / "gates.json").read_text(),
+    )
+    assert archived_gates["lifecycle"]["status"] == "deprecated"
+    assert archived_gates["lifecycle"]["deprecated_by"] == {
+        "skill_name": "synth-test-pipeline",
+        "proposal_id": replacement["proposal_id"],
+        "owner": "migration-owner",
+    }
+
+
 def test_write_accept_and_patch_preserve_bundle_files(tmp_path: Path) -> None:
     home = tmp_path / ".opensquilla"
     result = proposals_lib.write_proposal(

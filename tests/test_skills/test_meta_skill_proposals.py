@@ -311,11 +311,21 @@ def test_accept_replace_and_rollback_actions_round_trip(tmp_path: Path) -> None:
         home=home,
         proposal_id=replacement_id,
         owner="script-test",
+        deprecates="synth-test-pipeline,legacy-script-synth",
+        migration_notes="Script migration keeps rollback metadata.",
     )
 
     assert replaced["status"] == "ok"
     assert replaced["replaced"] is True
     assert replaced["rollback_target"]["proposal_id"] == first_id
+    gates = json.loads((home / "skills" / "synth-test-pipeline" / "gates.json").read_text())
+    assert gates["lifecycle"]["deprecates"] == [
+        "synth-test-pipeline",
+        "legacy-script-synth",
+    ]
+    assert gates["lifecycle"]["migration_notes"] == (
+        "Script migration keeps rollback metadata."
+    )
 
     rolled_back = _run(
         "rollback",
