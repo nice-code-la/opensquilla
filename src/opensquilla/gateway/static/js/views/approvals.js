@@ -250,6 +250,7 @@ const ApprovalsView = (() => {
     const title = item.summary || item.toolName || item.pluginId || item.actionKind || 'Unknown';
     const command = _approvalCommand(item);
     const detail = _approvalDetail(item);
+    const context = _approvalContext(item);
     const canAlways = item.namespace === 'exec' && !!command;
     return `<article class="ap-card">
       <header class="ap-card__head">
@@ -263,6 +264,7 @@ const ApprovalsView = (() => {
         ${item.agent ? `<span><em>Agent</em> ${_esc(item.agent)}</span>` : ''}
         ${item.sessionKey ? `<span><em>Session</em> <code>${_esc(item.sessionKey)}</code></span>` : ''}
       </div>
+      ${context}
       ${command ? `<div class="ap-card__block">
         <div class="ap-card__block-label">Command</div>
         <pre class="ap-card__pre ap-card__pre--cmd">${_esc(command)}</pre>
@@ -278,6 +280,19 @@ const ApprovalsView = (() => {
         <button class="btn btn--danger" data-appr-id="${_esc(item.id || '')}" data-appr-ns="${_esc(item.namespace || 'exec')}" data-decision="deny">${icons.x()}<span>Deny</span></button>
       </div>
     </article>`;
+  }
+
+  function _approvalContext(item) {
+    const reason = item.reason || item.args?.reason || '';
+    const risk = item.riskLevel || item.risk_level || item.args?.riskLevel || item.args?.risk_level || '';
+    const source = item.source || item.args?.source || item.triggeredBy || item.triggered_by || '';
+    const parts = [
+      reason ? `<span class="ap-context__item"><span class="ap-context__label">Reason</span>${_esc(reason)}</span>` : '',
+      risk ? `<span class="ap-context__item"><span class="ap-context__label">Risk</span>${_esc(risk)}</span>` : '',
+      source ? `<span class="ap-context__item"><span class="ap-context__label">Source</span>${_esc(source)}</span>` : '',
+    ].filter(Boolean);
+    if (!parts.length) return '';
+    return `<div class="ap-card__context">${parts.join('')}</div>`;
   }
 
   function _bindModeSave(container, currentMode) {

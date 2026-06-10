@@ -68,6 +68,23 @@ def test_approval_card_title_prefers_summary_over_tool_name() -> None:
     assert '<span class="ap-card__name">${_esc(title)}</span>' in js
 
 
+def test_approval_card_renders_review_context_beyond_summary() -> None:
+    js = APPROVALS_JS.read_text(encoding="utf-8")
+    css = APPROVALS_CSS.read_text(encoding="utf-8")
+
+    assert "const context = _approvalContext(item);" in js
+    assert "function _approvalContext(item)" in js
+    assert "item.reason || item.args?.reason" in js
+    assert "item.riskLevel || item.risk_level || item.args?.riskLevel || item.args?.risk_level" in js
+    assert "item.source || item.args?.source || item.triggeredBy || item.triggered_by" in js
+    assert '<div class="ap-card__context">' in js
+    assert '<span class="ap-context__label">Reason</span>' in js
+    assert '<span class="ap-context__label">Risk</span>' in js
+    assert '<span class="ap-context__label">Source</span>' in js
+    assert ".ap-card__context {" in css
+    assert ".ap-context__item {" in css
+
+
 def test_approvals_view_separates_strategy_from_effective_execution_mode() -> None:
     js = APPROVALS_JS.read_text(encoding="utf-8")
 
