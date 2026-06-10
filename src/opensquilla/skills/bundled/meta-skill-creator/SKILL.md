@@ -792,7 +792,7 @@ composition:
       label: "最终回复"
       label_en: "Final response"
       kind: tool_call
-      depends_on: [preview, normal_skill_exit, patch_proposal, benchmark_proposals]
+      depends_on: [preview, persist, normal_skill_exit, patch_proposal, benchmark_proposals]
       tool: emit_text
       tool_args:
         text: |
@@ -802,6 +802,12 @@ composition:
           {{ outputs.patch_proposal }}
           {% elif outputs.benchmark_proposals %}
           {{ outputs.benchmark_proposals }}
+          {% elif outputs.persist %}
+          Saved proposal status:
+          {{ outputs.persist }}
+
+          Preview:
+          {{ outputs.preview }}
           {% else %}
           {{ outputs.preview }}
           {% endif %}

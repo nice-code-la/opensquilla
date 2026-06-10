@@ -363,6 +363,22 @@ def test_creator_dag_generates_optional_bundle_assets_before_persist() -> None:
     assert persist.tool_args["bundle_files_json"] == "{{ outputs.bundle_assets }}"
 
 
+def test_creator_final_response_includes_persist_status() -> None:
+    from opensquilla.skills.loader import SkillLoader
+
+    spec = SkillLoader(bundled_dir=BUNDLED).get_by_name("meta-skill-creator")
+    assert spec is not None
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    final_response = steps["final_response"]
+    assert "persist" in final_response.depends_on
+    final_text = str(final_response.tool_args["text"])
+    assert "outputs.persist" in final_text
+    assert "Saved proposal status" in final_text
+
+
 def test_creator_dag_routes_patch_proposal_without_persist(tmp_path) -> None:
     loader = SkillLoader(bundled_dir=BUNDLED, snapshot_path=tmp_path / "snap.json")
     loader.invalidate_cache()
