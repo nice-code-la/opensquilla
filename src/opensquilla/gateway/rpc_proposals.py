@@ -109,7 +109,17 @@ async def _handle_reject(
     params: dict | None, ctx: RpcContext,
 ) -> dict[str, Any]:
     pid = _require_proposal_id(params)
-    return proposals_lib.reject_proposal(_home(), pid)
+    payload = params or {}
+    return proposals_lib.reject_proposal(
+        _home(),
+        pid,
+        reason=str(payload.get("reason") or ""),
+        stage=str(payload.get("stage") or ""),
+        task_class=str(payload.get("task_class") or ""),
+        selected_pattern=str(payload.get("selected_pattern") or ""),
+        preferred_pattern=str(payload.get("preferred_pattern") or ""),
+        review_signal=str(payload.get("review_signal") or ""),
+    )
 
 
 @_d.method("exec.proposals.auto_enabled.list", scope="operator.proposals")

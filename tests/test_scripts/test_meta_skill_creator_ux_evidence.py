@@ -102,6 +102,14 @@ def test_ux_evidence_summarizes_actionable_proposal_review_state(
             "detail": "single-model score=0.53; Add an Inputs section",
         },
     ]
+    assert [hint["gate"] for hint in proposal["repair_hints"]] == [
+        "collision_check",
+        "acceptance_compare",
+    ]
+    assert proposal["repair_hints"][0]["patch_operations"] == [
+        "remove_triggers",
+        "add_triggers",
+    ]
     assert proposal["next_actions"] == {
         "refresh": f"opensquilla skills meta proposals refresh {proposal_id}",
         "patch": f"opensquilla skills meta proposals patch {proposal_id}",
@@ -113,6 +121,7 @@ def test_ux_evidence_summarizes_actionable_proposal_review_state(
         "proposal_health_visible_in_webui": True,
         "dry_run_sample_visible_in_webui": True,
         "lifecycle_commands_visible_in_webui": True,
+        "repair_hints_visible_in_webui": True,
         "review_context_visible_in_approvals": True,
     }
     assert evidence["limitations"] == [

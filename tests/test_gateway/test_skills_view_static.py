@@ -128,6 +128,17 @@ def test_skill_proposal_detail_includes_dry_run_sample_prompt() -> None:
     assert ".sk-dry-run" in css
 
 
+def test_skill_proposal_detail_surfaces_repair_hints() -> None:
+    source = SKILLS_JS.read_text(encoding="utf-8")
+    css = SKILLS_CSS.read_text(encoding="utf-8")
+
+    assert "function _renderProposalRepairHints(gates)" in source
+    assert "<h4>Recommended repairs</h4>" in source
+    assert "repair_hints" in source
+    assert "${_renderProposalRepairHints(data.gates || {})}" in source
+    assert ".sk-repair-hints" in css
+
+
 def test_skill_proposal_rows_offer_lifecycle_command_hints() -> None:
     source = SKILLS_JS.read_text(encoding="utf-8")
     css = SKILLS_CSS.read_text(encoding="utf-8")
@@ -142,3 +153,14 @@ def test_skill_proposal_rows_offer_lifecycle_command_hints() -> None:
     assert "opensquilla skills meta proposals patch" in source
     assert "opensquilla skills meta proposals benchmark" in source
     assert ".sk-proposal-row__lifecycle" in css
+
+
+def test_proposal_reject_sends_feedback_reason_to_rpc() -> None:
+    source = SKILLS_JS.read_text(encoding="utf-8")
+    start = source.index("async function _rejectProposal")
+    body = source[start : source.index("  async function _disableAutoEnabled", start)]
+
+    assert "Reject reason (optional)" in body
+    assert "reason:" in body
+    assert "review_signal: 'reject_reason'" in body
+    assert "_rpc.call('exec.proposals.reject'" in body

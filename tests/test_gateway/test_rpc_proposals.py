@@ -235,6 +235,32 @@ async def test_reject_removes_proposal(_isolated_home: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reject_records_feedback_params_for_creator_learning(
+    _isolated_home: Path,
+) -> None:
+    from opensquilla.gateway.rpc_proposals import _handle_reject
+
+    pid = _seed(_isolated_home)
+    out = await _handle_reject(
+        {
+            "proposal_id": pid,
+            "reason": "reviewer selected wrong pattern",
+            "stage": "pattern_picker",
+            "task_class": "multi-source research synthesis",
+            "selected_pattern": "p1_sequential",
+            "preferred_pattern": "p2_fan_out_merge",
+        },
+        _make_ctx(),
+    )
+
+    assert out["status"] == "ok"
+    summary = proposals_lib.creator_learning_summary(_isolated_home)
+    card = summary["feedback_by_stage"]["pattern_picker"][0]
+    assert card["applies_to_task_class"] == "multi-source research synthesis"
+    assert card["next_run_controls"]["preferred_pattern"] == "p2_fan_out_merge"
+
+
+@pytest.mark.asyncio
 async def test_rejecting_unknown_proposal_returns_error(
     _isolated_home: Path,
 ) -> None:

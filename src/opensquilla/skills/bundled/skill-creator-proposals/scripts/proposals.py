@@ -98,7 +98,16 @@ def cmd_accept(args: argparse.Namespace) -> dict:
 
 
 def cmd_reject(args: argparse.Namespace) -> dict:
-    return proposals_lib.reject_proposal(Path(args.home), args.proposal_id)
+    return proposals_lib.reject_proposal(
+        Path(args.home),
+        args.proposal_id,
+        reason=args.reason or "",
+        stage=args.stage or "",
+        task_class=args.task_class or "",
+        selected_pattern=args.selected_pattern or "",
+        preferred_pattern=args.preferred_pattern or "",
+        review_signal=args.review_signal or "",
+    )
 
 
 def cmd_rollback(args: argparse.Namespace) -> dict:
@@ -206,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--bundle-files-json", default=None)
     p.add_argument("--proposal-id", default=None)
     p.add_argument("--skill-name", default=None)
+    p.add_argument("--reason", default=None)
+    p.add_argument("--stage", default=None)
+    p.add_argument("--task-class", default=None)
+    p.add_argument("--selected-pattern", default=None)
+    p.add_argument("--preferred-pattern", default=None)
+    p.add_argument("--review-signal", default=None)
     p.add_argument("--force", action="store_true")
     p.add_argument("--replace", nargs="?", const=True, default=False, type=_bool_arg)
     p.add_argument("--deprecates", default=None)

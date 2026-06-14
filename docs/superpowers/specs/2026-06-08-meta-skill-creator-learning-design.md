@@ -29,6 +29,66 @@ behind one slash command without requiring a full executable DAG. Hermes skills
 declare tool requirements, fallback behavior, platform constraints, config
 requirements, and hub/tap distribution metadata.
 
+## Learning Method: Borrow Principles, Not Surfaces
+
+Claude Code and Hermes Agent should be treated as reference systems, not as
+implementation templates. A feature is only worth adopting when its underlying
+principle maps cleanly onto OpenSquilla's proposal-gated MetaSkill lifecycle.
+
+Use this filter before importing an external pattern:
+
+1. **Separate surface from mechanism.** XML tags, section names, and prompt
+   phrasing are surface. Progressive disclosure, class-first skill memory,
+   proposal gates, repair loops, and eval-backed prompt behavior are mechanisms.
+2. **Identify the product invariant.** Claude optimizes for reliable context
+   loading and structured instruction following. Hermes optimizes for procedural
+   memory that improves over repeated use. OpenSquilla optimizes for reviewable,
+   gated, multi-skill orchestration proposals.
+3. **Map to an existing lifecycle stage.** Prefer fitting a principle into
+   clarification, slot generation, proposal gates, repair hints, benchmark,
+   learning summary, or approval review. Avoid adding a parallel creator path.
+4. **Define a measurable behavior.** Every adopted principle needs a prompt
+   contract, gate result, benchmark case, or regression test that can fail when
+   the principle is removed.
+5. **Reject mismatched mechanisms.** Do not import a mechanism just because it
+   works elsewhere if it bypasses proposal gates, weakens reviewability, or
+   duplicates an existing OpenSquilla layer.
+
+### Reference Pattern Mapping
+
+| Reference pattern | Why it works there | OpenSquilla-compatible lesson | Adopt now? | Validation signal |
+| --- | --- | --- | --- | --- |
+| Claude XML/sectioned prompting | Reduces ambiguity between role, context, examples, constraints, and output | Use structured prompt regions for slot filling and gate repair prompts, but keep schema validation as the source of truth | Yes | Prompt contract tests plus schema-validation retries |
+| Claude examples / eval-first guidance | Gives the model positive and negative target behavior before generation | Pair every generated activation surface with positive and negative prompts, not just a prose trigger | Yes | Activation eval gate, negative prompt false-positive checks |
+| Claude supporting files / progressive disclosure | Keeps the main skill small while allowing deep references on demand | Keep generated `SKILL.md` concise and move bulky references/scripts into proposal bundle files | Yes, when bundle file support is used | Proposal manifest lists linked files; lint rejects oversized SKILL.md |
+| Hermes `skill_manage` patch-over-rewrite | Prevents accumulated duplicate skills and makes small corrections cheap | Prefer patching pending proposals or superseding accepted skills over regenerating from scratch | Yes for proposals, later for accepted-skill replacement UX | Proposal revision lineage and stale-gate refresh tests |
+| Hermes class-first skill review | Captures reusable task classes rather than one-off session transcripts | Generate meta-skills for a recurring task class, not a single-session replica | Yes | `TASK_CLASS` preservation tests and trigger-boundary gates |
+| Hermes background skill review | Learns after task completion without interrupting the main task | Useful for future auto-propose suggestions, but must remain advisory and gated | Later | Learning events create draft seeds, not installed skills |
+| Hermes agent-managed direct skill creation | Makes the agent self-improving quickly | Too permissive for OpenSquilla installable MetaSkills because it can bypass proposal gates | No direct adoption | No path writes installed skills without proposal gates |
+| Hermes bundles / slash profiles | Loads a repeated skill set without executable DAG overhead | Add a separate bundle/profile layer only for non-DAG combinations | Later | Loader keeps `kind: bundle` separate from `kind: meta` |
+
+### Adoption Gates
+
+An external idea can move from "interesting" to "implemented" only if it passes
+these gates:
+
+- **Fit gate:** The idea maps to an existing OpenSquilla lifecycle stage or a
+  clearly separate new layer. If it creates a second creator pipeline, reject it.
+- **Safety gate:** The idea cannot promote, install, or modify user-visible
+  skills without the existing proposal review path.
+- **Quality gate:** The idea has at least one measurable claim, such as fewer
+  overbroad triggers, better input/output contract retention, or lower false
+  positive activation.
+- **Regression gate:** The claim is locked by a test or benchmark. Prompt-only
+  behavior must have tests for the decisive strings or structured fields.
+- **UX gate:** The user can understand what happened: preview, proposal id,
+  gate blockers, repair hints, or review summary.
+
+This keeps the creator from becoming a pile of borrowed prompt snippets. The
+goal is to absorb Claude's structured generation discipline and Hermes'
+procedural-memory discipline while preserving OpenSquilla's core advantage:
+reviewable, gated, multi-skill orchestration.
+
 ## Design Goals
 
 1. Preserve OpenSquilla's gated MetaSkill proposal lifecycle as the source of
@@ -295,6 +355,82 @@ without automatically installing anything.
 - A future router MetaSkill may become useful once the retained catalog grows
   enough that retrieval and trigger collision become the bottleneck.
 
+### Layer 7A: Continuous Meta-Skill Optimization
+
+Hermes Agent's strongest lesson is that skills should evolve from usage,
+corrections, and failures. OpenSquilla should adopt that loop without adopting
+Hermes-style direct installed-skill mutation. The safe OpenSquilla loop is:
+
+```text
+creator run, gate failure, benchmark, accept, rollback, or user correction
+  -> sanitized creator learning event
+  -> ranked lesson card
+  -> generation prompt hint, patch proposal, or benchmark case
+  -> normal proposal gates
+  -> human review / accept / rollback
+```
+
+The learning layer should distinguish raw events from interpreted lessons.
+Events are append-only facts. Lesson cards are derived, compact, ranked, and
+safe to show to the generator.
+
+Each lesson card should contain:
+
+```json
+{
+  "lesson_id": "overbroad_trigger:fragile-skill:2",
+  "pattern": "overbroad_trigger",
+  "confidence": "medium",
+  "evidence_count": 2,
+  "sources": ["rolled_back", "activation_eval"],
+  "problem": "Generated trigger caught generic summarize requests.",
+  "recommendation": "Require action/domain nouns and add a skip eval prompt.",
+  "prompt_hint": "Avoid generic verbs such as summarize or review unless paired with the task domain.",
+  "patch_hint": {
+    "remove_triggers": ["summarize", "review"],
+    "append_eval_prompts": [
+      {
+        "name": "negative_generic_summary",
+        "prompt": "summarize this generic note",
+        "expect": "skip"
+      }
+    ]
+  }
+}
+```
+
+Initial taxonomy:
+
+- `overbroad_trigger`: activation false positives, trigger collisions, or
+  rollback reasons mentioning broad triggers.
+- `missing_input_contract`: generation-quality or human-review feedback says
+  required inputs/files/config are unclear.
+- `missing_output_contract`: proposal lacks required final artifact, sections,
+  or completion evidence.
+- `weak_negative_cases`: candidate has triggers but no useful skip examples or
+  negative eval prompts.
+- `bad_eval_prompts`: activation examples are labels, self-referential, too
+  similar, or fail to cover adjacent tasks.
+- `benchmark_regression`: benchmark loses to a prior revision or introduces a
+  case-level regression.
+- `rollback_after_accept`: an accepted skill was reverted, so future generator
+  output should treat that proposal as negative evidence.
+
+Lesson cards should influence generation in three bounded ways:
+
+1. `meta_skill_fill_slots` receives the highest-ranked relevant cards as
+   advisory context and must decide whether each card applies to the current
+   `TASK_CLASS`.
+2. Patch mode can convert a lesson card into a bounded patch proposal, such as
+   trigger refinement, `eval_prompts` addition, or output-contract merge.
+3. Benchmark mode can convert lesson cards into fixed eval cases for comparing
+   proposal revisions.
+
+Lesson cards must never directly edit installed skills, silently promote a
+proposal, or bypass stale-gate refresh. This preserves the safety benefit of
+OpenSquilla's proposal lifecycle while borrowing Hermes' procedural-memory
+feedback loop.
+
 ## Data Flow
 
 ### Conversation or Run to Proposal
@@ -330,6 +466,24 @@ without automatically installing anything.
 2. If later usage shows the bundle needs ordered outputs, branching, or quality
    gates, creator can convert the bundle into a MetaSkill draft seed.
 3. Conversion enters the normal proposal lifecycle.
+
+### Continuous Optimization
+
+1. A creator event is recorded from persistence, benchmark, acceptance,
+   rollback, gate failure, or explicit user correction.
+2. Event sanitization strips secrets, unknown keys, multiline raw traces, and
+   unbounded prose.
+3. Lesson-card builder groups recent events by taxonomy, skill name, proposal
+   id, and reason.
+4. Ranked cards are returned by `creator_learning_summary` alongside the
+   existing human-readable summary.
+5. The creator DAG injects cards into slot filling as advisory memory.
+6. If a card targets an existing pending proposal, patch mode can produce a
+   revision rather than regenerating a sibling.
+7. If a card targets an accepted skill, the system creates a reviewable patch or
+   replacement proposal and requires normal gates before promotion.
+8. Benchmark mode replays lesson-derived eval cases to compare old and new
+   proposal behavior.
 
 ## Error Handling
 
@@ -387,6 +541,13 @@ without automatically installing anything.
 14. Rollback tests disable a promoted revision and restore previous behavior.
 15. Regression tests ensure existing `PREVIEW_ONLY`, `PERSISTED_PROPOSAL`, and
    `FULL_GATED` behavior remains unchanged.
+16. Lesson-card tests derive `overbroad_trigger`, `missing_input_contract`,
+    `weak_negative_cases`, and `benchmark_regression` cards from sanitized
+    learning events.
+17. Prompt-consumption tests prove relevant lesson cards are passed into
+    `meta_skill_fill_slots` and irrelevant cards remain advisory.
+18. Safety tests prove lesson cards cannot directly mutate installed skills or
+    bypass stale-gate refresh.
 
 ## Rollout Plan
 
@@ -424,6 +585,14 @@ Use repeated successful patterns, user corrections, and benchmark results to
 suggest proposal drafts or revisions. Suggestions remain reviewable proposals,
 not automatic installed skills.
 
+### P4A: Continuous Optimization Loop
+
+Add lesson cards as the bridge between raw learning events and future creator
+behavior. This slice should be implemented before any autonomous installed-skill
+mutation is considered. P4A is allowed to influence prompts, patch proposals, and
+benchmark cases; it is not allowed to promote, install, or edit accepted skills
+without existing proposal gates.
+
 ## Success Criteria
 
 - A successful run can become a reviewable MetaSkill draft without manual YAML
@@ -446,6 +615,12 @@ not automatic installed skills.
 - Creator quality can be compared over eval prompts before promotion.
 - A promoted skill can be rolled back without manually editing files.
 - Missing tools or platform requirements are visible before invocation.
+- Repeated creator failures become ranked lesson cards with evidence counts,
+  problem statements, recommendations, and bounded patch hints.
+- Future generation receives relevant lesson cards as advisory JSON and can
+  convert them into safer triggers, negative cases, eval prompts, and rationale.
+- Lesson-derived improvements remain reviewable through proposal patches,
+  gates, and benchmarks.
 
 ## P0 and P1 Acceptance Criteria
 
@@ -538,6 +713,16 @@ P1 author entry:
 - Risk: corrections over-propagate into unrelated workflows.
   Mitigation: propagate corrections as suggestions and benchmark cases, not
   automatic edits.
+- Risk: lesson cards become prompt injection carriers.
+  Mitigation: derive cards only from sanitized event fields, cap text lengths,
+  preserve source provenance, and inject them as advisory JSON rather than raw
+  user prose.
+- Risk: stale lessons keep penalizing a repaired skill.
+  Mitigation: rank by recency and evidence count, keep accepted benchmark wins as
+  counter-evidence, and expose source ids for review.
+- Risk: lesson-card patches become too powerful.
+  Mitigation: map cards only to existing bounded patch operations and rerun stale
+  gates before accept.
 
 ## Evidence Anchors
 
@@ -548,3 +733,7 @@ P1 author entry:
   create/eval/improve/benchmark lifecycle.
 - Hermes Agent contributes agent-managed skill patching, skill bundles,
   conditional requirements, hub/tap lifecycle, and procedural-memory learning.
+- Hermes-style direct skill mutation is intentionally not adopted for installed
+  OpenSquilla skills; continuous optimization remains proposal-gated because
+  persistent memory, self-authored skills, scheduling, and shell share an
+  authority boundary in always-on agents.

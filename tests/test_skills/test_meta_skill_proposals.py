@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from opensquilla.skills import proposals_lib
+
 REPO = Path(__file__).resolve().parents[2]
 _BUNDLED = REPO / "src" / "opensquilla" / "skills" / "bundled"
 PROPOSALS = _BUNDLED / "skill-creator-proposals" / "scripts" / "proposals.py"
@@ -90,6 +92,33 @@ def test_write_proposal_marks_ineligible_on_g3_fail(tmp_path: Path) -> None:
     )
     gates = json.loads((home / "proposals" / out["proposal_id"] / "gates.json").read_text())
     assert gates["auto_enable_eligible"] is False
+
+
+def test_reject_records_feedback_reason_for_creator_learning(tmp_path: Path) -> None:
+    home = tmp_path / ".opensquilla"
+    out = _run(
+        "write_proposal", home=home,
+        skill_md_inline=SAMPLE_SKILL_MD,
+        lint_result=json.dumps({"G1": {"passed": True}, "G2": {"passed": True}}),
+        smoke_result=json.dumps({"G3": {"passed": True}, "G4": {"passed": True}}),
+    )
+
+    rejected = _run(
+        "reject",
+        home=home,
+        proposal_id=out["proposal_id"],
+        reason="wrong pattern for independent source analysis",
+        stage="pattern_picker",
+        task_class="multi-source research synthesis",
+        selected_pattern="p1_sequential",
+        preferred_pattern="p2_fan_out_merge",
+        review_signal="reject_reason",
+    )
+
+    assert rejected["status"] == "ok"
+    summary = proposals_lib.creator_learning_summary(home)
+    card = summary["feedback_by_stage"]["pattern_picker"][0]
+    assert card["next_run_controls"]["preferred_pattern"] == "p2_fan_out_merge"
 
 
 def test_write_proposal_marks_full_gated_ineligible_on_compare_loss(

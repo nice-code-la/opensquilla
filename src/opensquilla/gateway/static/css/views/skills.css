@@ -912,6 +912,40 @@
   margin-top: 8px;
 }
 
+.sk-repair-hints ul {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sk-repair-hints li {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+}
+
+.sk-repair-hints p {
+  margin: 4px 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.sk-repair-hints span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sk-repair-hints__ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
 .sk-command-hint p {
   margin: 0 0 8px;
   color: var(--text-muted);

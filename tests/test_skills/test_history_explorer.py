@@ -121,6 +121,63 @@ def test_co_occurrence_uses_redacted_intent_summary(tmp_path: Path) -> None:
     ]
 
 
+def test_failure_paths_summarize_failed_decision_log_steps(tmp_path: Path) -> None:
+    from datetime import UTC, datetime
+
+    log = tmp_path / "decisions-20260520.jsonl"
+    payload = {
+        "turn_id": "t1",
+        "session_key": "s1",
+        "prompt_hash": "a" * 16,
+        "system_prompt_hash": "b" * 16,
+        "tool_list_hash": "c" * 16,
+        "tool_choice": "auto",
+        "tokens_input": 1,
+        "tokens_output": 2,
+        "model": "x",
+        "provider": "y",
+        "latency_ms": 3,
+        "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "schema_version": 12,
+        "skills_invoked": ["history-explorer", "summarize"],
+        "intent_summary": "generate operational summary from history",
+        "pipeline_steps": [
+            {
+                "step_id": "harvest",
+                "status": "failed",
+                "skill": "history-explorer",
+                "error": "history-explorer command timed out",
+                "substitute_step_id": "harvest_empty",
+            },
+            {
+                "step_id": "harvest_empty",
+                "status": "substituted",
+                "skill": "emit_text",
+            },
+        ],
+    }
+    log.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    out = _run_explore(
+        tmp_path,
+        "generate operational summary from history",
+        include="failure_paths",
+    )
+
+    assert out["failure_paths"] == [{
+        "source": "decision_log",
+        "task_class_hint": "generate operational summary from history",
+        "failed_step_id": "harvest",
+        "failed_skill": "history-explorer",
+        "failed_stage": "context_builder",
+        "error_family": "timeout",
+        "had_fallback": True,
+        "recovered_by": "harvest_empty",
+        "sample_reason": "history-explorer command timed out",
+        "count": 1,
+    }]
+
+
 def test_router_fixtures_surfaces_fixture_files(tmp_path: Path) -> None:
     """Just verify the keys exist and the script doesn't crash."""
     out = _run_explore(tmp_path, "anything")

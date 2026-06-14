@@ -110,6 +110,67 @@ def test_meta_skill_assemble_omits_visibility_metadata_when_unspecified() -> Non
     assert "config_keys" not in opensquilla_meta
 
 
+def test_meta_skill_assemble_renders_activation_eval_prompts() -> None:
+    slots = {
+        "name": "decision-brief-flow",
+        "description": "Pipeline for recurring decision briefs from source material.",
+        "triggers": ["decision brief from source docs"],
+        "steps": [
+            {"id": "extract", "skill": "summarize", "task": "Extract constraints", "with_keys": {}},
+            {
+                "id": "draft",
+                "skill": "summarize",
+                "task": "Draft the decision memo",
+                "with_keys": {},
+            },
+        ],
+        "eval_prompts": [
+            {
+                "name": "positive_decision_brief",
+                "prompt": "prepare a decision brief from source docs",
+                "expect": "activate",
+            },
+            {
+                "name": "negative_generic_summary",
+                "prompt": "summarize this generic document",
+                "expect": "skip",
+            },
+        ],
+    }
+
+    md = meta_skill_assemble("p1_sequential", json.dumps(slots))
+    frontmatter = _frontmatter(md)
+
+    assert frontmatter["eval_prompts"] == slots["eval_prompts"]
+
+
+def test_meta_skill_assemble_rejects_invalid_eval_prompt_expect() -> None:
+    slots = {
+        "name": "decision-brief-flow",
+        "description": "Pipeline for recurring decision briefs from source material.",
+        "triggers": ["decision brief from source docs"],
+        "steps": [
+            {"id": "extract", "skill": "summarize", "task": "Extract constraints", "with_keys": {}},
+            {
+                "id": "draft",
+                "skill": "summarize",
+                "task": "Draft the decision memo",
+                "with_keys": {},
+            },
+        ],
+        "eval_prompts": [
+            {
+                "name": "bad_expect",
+                "prompt": "prepare a decision brief from source docs",
+                "expect": "maybe",
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="eval_prompts"):
+        meta_skill_assemble("p1_sequential", json.dumps(slots))
+
+
 def test_meta_skill_assemble_rejects_invalid_slots() -> None:
     with pytest.raises(ValueError):
         meta_skill_assemble("p1_sequential", '{"name": "x"}')
@@ -148,6 +209,307 @@ def test_meta_skill_fill_slots_with_stub_llm(monkeypatch) -> None:
     assert "summarize" in call_log[0]
 
 
+def test_meta_skill_fill_slots_prompt_uses_structured_generation_rubric(monkeypatch) -> None:
+    from opensquilla.skills.creator import proposer
+
+    prompts: list[str] = []
+    canned_response = json.dumps({
+        "name": "decision-brief-pipeline",
+        "description": (
+            "Pipeline that turns source documents into a decision-ready brief "
+            "while preserving scope constraints."
+        ),
+        "meta_priority": 50,
+        "triggers": ["decision brief from source docs"],
+        "steps": [
+            {"id": "extract", "skill": "summarize", "task": "extract", "with_keys": {}},
+            {"id": "save", "skill": "memory", "task": "save", "with_keys": {}},
+        ],
+    })
+
+    def stub_llm(prompt: str, **_kwargs) -> str:
+        prompts.append(prompt)
+        return canned_response
+
+    monkeypatch.setattr(proposer, "_call_llm_for_slots", stub_llm)
+
+    proposer.meta_skill_fill_slots(
+        pattern_id="p1_sequential",
+        history_summary="User prefers skills that are narrow and auditable.",
+        user_intent=(
+            "Raw user request: create a workflow for decision briefs.\n"
+            "Clarified intent:\n"
+            "INPUT_CONTRACT: source PDFs and reviewer notes.\n"
+            "OUTPUT_CONTRACT: decision memo with cited constraints.\n"
+            "NEGATIVE_CASES: generic document summaries; creator validation flow.\n"
+            "SUCCESS_CRITERIA: reviewer can approve or reject with evidence."
+        ),
+        draft_seed_json=json.dumps({
+            "required_triggers": ["decision brief from source docs"],
+            "negative_cases": ["generic document summaries"],
+            "success_criteria": ["memo cites source constraints"],
+        }),
+    )
+
+    prompt = prompts[0]
+    for tag in (
+        "<role>",
+        "<task>",
+        "<schema>",
+        "<catalog>",
+        "<context>",
+        "<intent_contract>",
+        "<examples>",
+        "<quality_rubric>",
+        "<self_check>",
+        "<output>",
+    ):
+        assert tag in prompt
+    assert "overbroad triggers" in prompt
+    assert "missing input/output contract" in prompt
+    assert "creator workflow steps" in prompt
+    assert "class of recurring tasks" in prompt
+    assert "class level" in prompt
+    assert "single-session replica" in prompt
+    assert "eval_prompts" in prompt
+    assert "positive activation" in prompt
+    assert "negative activation" in prompt
+    assert "Do not output the self-check" in prompt
+    assert "decision brief from source docs" in prompt
+    assert "generic document summaries" in prompt
+
+
+def test_meta_skill_fill_slots_prompt_includes_creator_lesson_cards(monkeypatch) -> None:
+    from opensquilla.skills.creator import proposer
+
+    prompts: list[str] = []
+    canned_response = json.dumps({
+        "name": "decision-brief-pipeline",
+        "description": "Pipeline that turns source documents into a decision-ready brief.",
+        "meta_priority": 50,
+        "triggers": ["decision brief from source docs"],
+        "steps": [
+            {
+                "id": "extract",
+                "skill": "summarize",
+                "task": "extract constraints",
+                "with_keys": {},
+            },
+            {
+                "id": "draft",
+                "skill": "summarize",
+                "task": "draft decision memo",
+                "with_keys": {},
+            },
+        ],
+    })
+
+    def stub_llm(prompt: str, **_kwargs) -> str:
+        prompts.append(prompt)
+        return canned_response
+
+    monkeypatch.setattr(proposer, "_call_llm_for_slots", stub_llm)
+
+    proposer.meta_skill_fill_slots(
+        pattern_id="p1_sequential",
+        history_summary="no history",
+        user_intent="TASK_CLASS: decision briefs from source docs",
+        creator_feedback_json=json.dumps({
+            "lesson_cards": [{
+                "pattern": "overbroad_trigger",
+                "recommendation": "Require action/domain nouns in triggers.",
+                "prompt_hint": "Avoid generic review triggers.",
+            }],
+        }),
+    )
+
+    prompt = prompts[0]
+    assert "<creator_lesson_cards>" in prompt
+    assert "overbroad_trigger" in prompt
+    assert "advisory JSON" in prompt
+    assert "current user requirements and gates still win" in prompt
+
+
+def test_meta_skill_fill_slots_prompt_includes_creator_success_pattern_cards(
+    monkeypatch,
+) -> None:
+    from opensquilla.skills.creator import proposer
+
+    prompts: list[str] = []
+    canned_response = json.dumps({
+        "name": "decision-brief-pipeline",
+        "description": "Pipeline that turns source documents into a decision-ready brief.",
+        "meta_priority": 50,
+        "triggers": ["decision brief from source docs"],
+        "steps": [
+            {
+                "id": "extract",
+                "skill": "summarize",
+                "task": "extract constraints",
+                "with_keys": {},
+            },
+            {
+                "id": "draft",
+                "skill": "summarize",
+                "task": "draft decision memo",
+                "with_keys": {},
+            },
+        ],
+    })
+
+    def stub_llm(prompt: str, **_kwargs) -> str:
+        prompts.append(prompt)
+        return canned_response
+
+    monkeypatch.setattr(proposer, "_call_llm_for_slots", stub_llm)
+
+    proposer.meta_skill_fill_slots(
+        pattern_id="p1_sequential",
+        history_summary="no history",
+        user_intent="TASK_CLASS: decision briefs from source docs",
+        creator_feedback_json=json.dumps({
+            "success_pattern_cards": [{
+                "applies_to_task_class": "decision briefs from source docs",
+                "source_patterns": ["accepted_skill", "benchmark_win"],
+                "selected_patterns": ["p1_sequential"],
+                "trigger_samples": ["decision brief from source docs"],
+                "skill_chains": ["summarize -> summarize"],
+                "prompt_hint": "Reuse as positive recipe when task class matches.",
+                "next_run_controls": {
+                    "prefer_successful_pattern": "p1_sequential",
+                    "reuse_successful_trigger_style": True,
+                },
+            }],
+        }),
+    )
+
+    prompt = prompts[0]
+    assert "<creator_success_pattern_cards>" in prompt
+    assert "accepted_skill" in prompt
+    assert "benchmark_win" in prompt
+    assert "decision briefs from source docs" in prompt
+    assert "prefer_successful_pattern" in prompt
+    assert "positive recipes" in prompt
+
+
+def test_meta_skill_fill_slots_prompt_includes_creator_feedback_cards(monkeypatch) -> None:
+    from opensquilla.skills.creator import proposer
+
+    prompts: list[str] = []
+    canned_response = json.dumps({
+        "name": "decision-brief-pipeline",
+        "description": "Pipeline that turns source documents into a decision-ready brief.",
+        "meta_priority": 50,
+        "triggers": ["decision brief from source docs"],
+        "steps": [
+            {
+                "id": "extract",
+                "skill": "summarize",
+                "task": "extract constraints",
+                "with_keys": {},
+            },
+            {
+                "id": "draft",
+                "skill": "summarize",
+                "task": "draft decision memo",
+                "with_keys": {},
+            },
+        ],
+    })
+
+    def stub_llm(prompt: str, **_kwargs) -> str:
+        prompts.append(prompt)
+        return canned_response
+
+    monkeypatch.setattr(proposer, "_call_llm_for_slots", stub_llm)
+
+    proposer.meta_skill_fill_slots(
+        pattern_id="p1_sequential",
+        history_summary="no history",
+        user_intent="TASK_CLASS: decision briefs from source docs",
+        creator_feedback_json=json.dumps({
+            "feedback_cards": [{
+                "stage": "pattern_picker",
+                "applies_to_task_class": "multi-source research synthesis",
+                "source_patterns": ["wrong_pattern"],
+                "recommendation": "Prefer fan-out merge for multi-source synthesis.",
+                "stage_hint": "Use as pattern-selection evidence next run.",
+                "next_run_controls": {
+                    "preferred_pattern": "p2_fan_out_merge",
+                    "avoid_patterns": ["p1_sequential"],
+                },
+                "blocked_actions": [
+                    "direct_installed_skill_edit",
+                    "bypass_proposal_gates",
+                ],
+            }],
+        }),
+    )
+
+    prompt = prompts[0]
+    assert "<creator_feedback_cards>" in prompt
+    assert "pattern_picker" in prompt
+    assert "multi-source research synthesis" in prompt
+    assert "preferred_pattern" in prompt
+    assert "p2_fan_out_merge" in prompt
+    assert "workflow-stage feedback" in prompt
+    assert "advisory only" in prompt
+
+
+def test_creator_learning_summary_tool_returns_lesson_cards(tmp_path) -> None:
+    from opensquilla.skills import proposals_lib
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "rolled_back",
+            "proposal_id": "abcd1234",
+            "skill_name": "fragile-skill",
+            "reason": "overbroad trigger",
+        },
+    )
+
+    payload = json.loads(proposer.meta_skill_creator_learning_summary(str(home)))
+
+    assert payload["status"] == "ok"
+    assert payload["lesson_cards"][0]["pattern"] == "overbroad_trigger"
+    assert "summary" in payload
+
+
+def test_import_history_failure_feedback_tool_returns_updated_summary(tmp_path) -> None:
+    from opensquilla.skills.creator import proposer
+
+    home = tmp_path / ".opensquilla"
+    history = {
+        "failure_paths": [{
+            "source": "decision_log",
+            "task_class_hint": "generate operational summary from history",
+            "failed_step_id": "harvest",
+            "failed_skill": "history-explorer",
+            "failed_stage": "context_builder",
+            "error_family": "timeout",
+            "had_fallback": False,
+            "sample_reason": "history-explorer command timed out",
+            "count": 1,
+        }]
+    }
+
+    payload = json.loads(
+        proposer.meta_skill_import_history_failure_feedback(
+            json.dumps(history),
+            str(home),
+        )
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["history_failure_feedback"]["imported_count"] == 1
+    card = payload["feedback_by_stage"]["context_builder"][0]
+    assert card["source_patterns"] == ["history_failure_path"]
+    assert card["next_run_controls"]["require_fallback_plan"] is True
+
+
 def test_creator_package_import_registers_tools() -> None:
     """C1 regression: importing the creator package must register creator tools
     in the default ToolRegistry. Phase 1 cross-task review found that the
@@ -171,6 +533,9 @@ def test_creator_package_import_registers_tools() -> None:
     )
     assert "meta_skill_creator_learning_summary" in names, (
         "meta_skill_creator_learning_summary not registered"
+    )
+    assert "meta_skill_import_history_failure_feedback" in names, (
+        "meta_skill_import_history_failure_feedback not registered"
     )
     assert "meta_skill_extract_proposal_id" in names, (
         "meta_skill_extract_proposal_id not registered"
@@ -662,6 +1027,36 @@ def test_sequential_slots_accept_generation_rationale() -> None:
     assert slots.generation_rationale.selected_pattern == "p1_sequential"
 
 
+def test_meta_skill_assemble_records_creator_pattern_metadata() -> None:
+    slots = {
+        "name": "test-rationale",
+        "description": "Pipeline that records successful creator pattern metadata.",
+        "triggers": ["pattern metadata flow"],
+        "steps": [
+            {"id": "a", "skill": "summarize", "task": "extract", "with_keys": {}},
+            {"id": "b", "skill": "memory", "task": "store", "with_keys": {}},
+        ],
+        "generation_rationale": {
+            "intent": "Create a reusable workflow from user intent.",
+            "target_outcome": "Generate a working meta-skill proposal.",
+            "stop_condition": "Proposal gates pass and reviewer can approve.",
+            "selected_shape": "metaskill",
+            "selected_pattern": "p1_sequential",
+            "source_evidence": ["User requested a sequential pipeline."],
+            "filled_slots": ["name", "triggers", "steps"],
+            "unresolved_assumptions": [],
+            "rejected_alternatives": ["Fan-out was unnecessary."],
+            "output_contract_summary": "Final skill preserves the pipeline contract.",
+        },
+    }
+
+    md = meta_skill_assemble("p1_sequential", json.dumps(slots))
+
+    assert _frontmatter(md)["metadata"]["opensquilla"]["creator_pattern"] == (
+        "p1_sequential"
+    )
+
+
 def test_fill_slots_prompt_requires_generation_rationale(monkeypatch) -> None:
     from opensquilla.skills.creator import proposer
 
@@ -960,6 +1355,71 @@ composition:
         "negative",
     ]
     assert payload["cases"][0]["prompt"] == "please use alpha report"
+
+
+def test_activation_eval_auto_uses_skill_eval_prompts(monkeypatch) -> None:
+    from opensquilla.skills.creator import proposer
+
+    skill_md = """---
+name: synth-alpha-report
+description: "Synthetic alpha report workflow."
+kind: meta
+meta_priority: 50
+triggers:
+  - "alpha report"
+eval_prompts:
+  - name: "positive_alpha_report"
+    prompt: "please prepare the alpha report from source docs"
+    expect: "activate"
+  - name: "negative_beta_digest"
+    prompt: "please prepare the beta digest from source docs"
+    expect: "skip"
+composition:
+  steps:
+    - id: summarize
+      skill: summarize
+      with:
+        text: "{{ inputs.user_message }}"
+---
+"""
+    captured: dict[str, object] = {}
+
+    def stub_evaluator(
+        skill_markdown,
+        positive_prompts,
+        negative_prompts,
+        *,
+        threshold,
+    ):
+        captured["positive_prompts"] = positive_prompts
+        captured["negative_prompts"] = negative_prompts
+        return {
+            "required": True,
+            "passed": True,
+            "reason": "ok",
+            "true_positive_rate": 1.0,
+            "false_positive_count": 0,
+            "cases": [],
+            "issues": [],
+            "metadata": {"threshold": threshold, "skill_len": len(skill_markdown)},
+        }
+
+    monkeypatch.setattr(proposer, "evaluate_candidate_activation", stub_evaluator)
+
+    result = proposer.meta_skill_activation_eval_run(
+        skill_md=skill_md,
+        positive_prompts="auto",
+        catalog_negative_prompts="auto",
+    )
+
+    payload = json.loads(result)
+    assert payload["passed"] is True
+    assert captured["positive_prompts"] == [
+        "please prepare the alpha report from source docs",
+    ]
+    assert captured["negative_prompts"] == [
+        "please prepare the beta digest from source docs",
+    ]
 
 
 def test_persist_proposal_forwards_generation_quality_and_activation_results(monkeypatch) -> None:

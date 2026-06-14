@@ -727,6 +727,7 @@ const SkillsView = (() => {
           ${auditHtml}
         </section>
         ${_renderProposalDryRun(data.skill_md || '')}
+        ${_renderProposalRepairHints(data.gates || {})}
         <section class="sk-detail__section">
           <h4>SKILL.md</h4>
           <pre class="sk-detail__pre">${_esc(data.skill_md || '')}</pre>
@@ -776,6 +777,28 @@ const SkillsView = (() => {
       <p>Use this sample prompt to test routing after acceptance.</p>
       <pre class="sk-detail__pre">${_esc(dryRun.sample)}</pre>
       <div class="sk-dry-run__triggers">${triggerList}</div>
+    </section>`;
+  }
+
+  function _renderProposalRepairHints(gates) {
+    const hints = gates && Array.isArray(gates.repair_hints)
+      ? gates.repair_hints
+      : [];
+    if (!hints.length) return '';
+    const rows = hints.slice(0, 6).map(hint => {
+      const ops = Array.isArray(hint.patch_operations)
+        ? hint.patch_operations.map(op => `<code>${_esc(String(op))}</code>`).join(' ')
+        : '';
+      return `<li>
+        <strong>${_esc(hint.gate || 'gate')}</strong>
+        <p>${_esc(hint.recommended_action || 'Patch the proposal, then refresh gates before accepting.')}</p>
+        ${hint.problem ? `<span>${_esc(hint.problem)}</span>` : ''}
+        ${ops ? `<div class="sk-repair-hints__ops">${ops}</div>` : ''}
+      </li>`;
+    }).join('');
+    return `<section class="sk-detail__section sk-repair-hints">
+      <h4>Recommended repairs</h4>
+      <ul>${rows}</ul>
     </section>`;
   }
 
@@ -855,8 +878,15 @@ const SkillsView = (() => {
       danger: true,
     });
     if (!ok) return;
+    const rejectReason = (
+      window.prompt('Reject reason (optional): what should the creator learn?', '') || ''
+    ).trim();
     try {
-      const data = await _rpc.call('exec.proposals.reject', { proposal_id: proposalId });
+      const data = await _rpc.call('exec.proposals.reject', {
+        proposal_id: proposalId,
+        reason: rejectReason,
+        review_signal: 'reject_reason',
+      });
       if (data.status !== 'ok') {
         UI.toast('Reject failed: ' + (data.reason || data.status), 'err');
         return;

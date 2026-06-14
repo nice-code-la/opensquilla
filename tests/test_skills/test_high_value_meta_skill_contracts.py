@@ -559,16 +559,16 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     _assert_user_input_step(
         steps,
         "creator_clarify",
-        when_contains="route: meta-skill",
+        when_contains="intent_field('route')",
         required_fields={"workflow_goal", "output_shape"},
     )
-    assert "needs_clarification: yes" in steps["creator_clarify"].when
+    assert "intent_field('needs_clarification')" in steps["creator_clarify"].when
     assert steps["normal_skill_exit"].kind == "tool_call"
     assert steps["normal_skill_exit"].tool == "emit_text"
-    assert "route: normal-skill" in steps["normal_skill_exit"].when
+    assert "intent_field('route')" in steps["normal_skill_exit"].when
     assert steps["creator_mode"].kind == "llm_classify"
     assert steps["creator_mode"].depends_on == ("clarify_intent", "creator_clarify")
-    assert "route: meta-skill" in steps["creator_mode"].when
+    assert "intent_field('route')" in steps["creator_mode"].when
     assert set(steps["creator_mode"].output_choices) == {
         "PREVIEW_ONLY",
         "PERSISTED_PROPOSAL",
@@ -584,6 +584,12 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     clarify_intent_text = str(steps["clarify_intent"].with_args)
     creator_mode_text = str(steps["creator_mode"].with_args)
     assert "NEEDS_CLARIFICATION" in clarify_intent_text
+    assert "INPUT_CONTRACT" in clarify_intent_text
+    assert "OUTPUT_CONTRACT" in clarify_intent_text
+    assert "NEGATIVE_CASES" in clarify_intent_text
+    assert "SUCCESS_CRITERIA" in clarify_intent_text
+    assert "TASK_CLASS" in clarify_intent_text
+    assert "class of recurring tasks" in clarify_intent_text
     assert "Clarification answers" in creator_mode_text
     assert "inputs.system_prompt" in creator_mode_text
     assert "unattended auto-propose" in creator_mode_text
@@ -632,7 +638,7 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
         "persist",
     }
     for step_id in creation_steps:
-        assert "route: meta-skill" in steps[step_id].when
+        assert "intent_field('route')" in steps[step_id].when
     assert "Unattended meta-skill auto-propose run" in steps["harvest"].when
     assert "outputs.creator_mode == 'PATCH_PROPOSAL'" in steps["build_patch_request"].when
     assert steps["extract_patch_target"].tool == "meta_skill_extract_proposal_id"
@@ -646,6 +652,7 @@ def test_meta_skill_creator_supports_preview_only_branch(tmp_path: Path) -> None
     assert "outputs.creator_mode != 'PREVIEW_ONLY'" in steps["persist"].when
     assert steps["final_response"].depends_on == (
         "preview",
+        "persist",
         "normal_skill_exit",
         "patch_proposal",
         "benchmark_proposals",
@@ -664,7 +671,7 @@ def test_meta_skill_creator_acceptance_compares_against_highest_tier_baseline(
 
     assert baseline.kind == "llm_chat"
     assert baseline.depends_on == ("creator_mode",)
-    assert "route: meta-skill" in baseline.when
+    assert "intent_field('route')" in baseline.when
     assert "outputs.creator_mode == 'FULL_GATED'" in baseline.when
     assert "highest-tier" in str(baseline.with_args).lower()
     assert "same task" in str(baseline.with_args).lower()
@@ -681,7 +688,7 @@ def test_meta_skill_creator_acceptance_compares_against_highest_tier_baseline(
         "generation_quality",
         "activation_eval",
     }
-    assert "route: meta-skill" in compare.when
+    assert "intent_field('route')" in compare.when
     assert "outputs.creator_mode == 'FULL_GATED'" in compare.when
     assert "orchestrated candidate" in str(compare.with_args).lower()
     assert "single-model baseline" in str(compare.with_args).lower()
@@ -691,7 +698,7 @@ def test_meta_skill_creator_acceptance_compares_against_highest_tier_baseline(
     assert "runtime_e2e" in steps
     assert steps["runtime_e2e"].kind == "tool_call"
     assert steps["runtime_e2e"].tool == "meta_skill_runtime_e2e_run"
-    assert "route: meta-skill" in steps["runtime_e2e"].when
+    assert "intent_field('route')" in steps["runtime_e2e"].when
     assert "outputs.creator_mode == 'FULL_GATED'" in steps["runtime_e2e"].when
     assert set(steps["runtime_e2e"].depends_on) == {"assemble", "smoke"}
     assert "acceptance_compare" in str(steps["preview"].depends_on)

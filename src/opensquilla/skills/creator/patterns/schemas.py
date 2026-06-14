@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 
 _YAML_UNSAFE_CHARS = ('"', "\n", "\r", "\\")
@@ -80,6 +82,29 @@ class ConditionalVisibility(BaseModel):
         return v
 
 
+class EvalPrompt(BaseModel):
+    name: str = Field(
+        min_length=3,
+        max_length=80,
+        pattern=r"^[a-z][a-z0-9_\-]{2,79}$",
+    )
+    prompt: str = Field(min_length=8, max_length=500)
+    expect: Literal["activate", "skip"]
+
+    @field_validator("name")
+    @classmethod
+    def _name_yaml_safe(cls, v: str) -> str:
+        return _check_yaml_safe(v, "eval prompt name")
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_not_multiline(cls, v: str) -> str:
+        text = v.strip()
+        if "\n" in text or "\r" in text:
+            raise ValueError("eval prompt may not contain newlines")
+        return text
+
+
 class SequentialStep(BaseModel):
     id: str = Field(pattern=r"^[a-z][a-z0-9_]{0,30}$")
     skill: str
@@ -106,6 +131,7 @@ class SequentialSlots(ConditionalVisibility):
     description: str = Field(min_length=30, max_length=200)
     meta_priority: int = Field(ge=30, le=80, default=50)
     triggers: list[str] = Field(min_length=1, max_length=8)
+    eval_prompts: list[EvalPrompt] = Field(default_factory=list, max_length=8)
     steps: list[SequentialStep] = Field(min_length=2, max_length=5)
     generation_rationale: GenerationRationale | None = None
 
@@ -167,6 +193,7 @@ class FanOutMergeSlots(ConditionalVisibility):
     description: str = Field(min_length=30, max_length=200)
     meta_priority: int = Field(ge=30, le=80, default=50)
     triggers: list[str] = Field(min_length=1, max_length=8)
+    eval_prompts: list[EvalPrompt] = Field(default_factory=list, max_length=8)
     branches: list[FanOutBranch] = Field(min_length=2, max_length=4)
     merge: FanOutBranch
     tail: FanOutTail | None = None

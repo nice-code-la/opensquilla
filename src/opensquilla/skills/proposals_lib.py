@@ -39,9 +39,20 @@ _CREATOR_LEARNING_EVENT_TYPES = frozenset({
     "rolled_back",
 })
 _CREATOR_LEARNING_STRING_FIELDS = (
+    "creator_mode",
+    "gate_name",
     "outcome",
+    "passed_gate_names",
+    "preferred_pattern",
     "reason",
+    "review_signal",
+    "selected_pattern",
+    "skill_chain",
     "source",
+    "stage",
+    "target_stage",
+    "task_class",
+    "trigger_samples",
 )
 _CREATOR_LEARNING_PROPOSAL_FIELDS = (
     "proposal_id",
@@ -49,6 +60,86 @@ _CREATOR_LEARNING_PROPOSAL_FIELDS = (
     "candidate_proposal_id",
     "restored_proposal_id",
 )
+_CREATOR_LESSON_PATTERNS = (
+    "overbroad_trigger",
+    "missing_input_contract",
+    "missing_output_contract",
+    "weak_negative_cases",
+    "bad_eval_prompts",
+    "benchmark_regression",
+    "rollback_after_accept",
+)
+_CREATOR_FEEDBACK_STAGES = (
+    "intent_brief",
+    "pattern_picker",
+    "context_builder",
+    "slot_generator",
+    "gate_calibration",
+    "review_ux",
+)
+_CREATOR_FEEDBACK_PATTERN_ORDER = (
+    "stage_feedback",
+    "reject_reason_feedback",
+    "history_failure_path",
+    "missing_input_contract",
+    "wrong_pattern",
+    "missed_existing_skill",
+    "overbroad_trigger",
+    "missing_output_contract",
+    "weak_negative_cases",
+    "bad_eval_prompts",
+    "benchmark_regression",
+    "rollback_after_accept",
+    "review_summary_gap",
+)
+_LESSON_PATTERN_KEYWORDS = {
+    "overbroad_trigger": (
+        "overbroad",
+        "broad trigger",
+        "false positive",
+        "collision",
+    ),
+    "missing_input_contract": (
+        "missing input",
+        "input contract",
+        "required source",
+    ),
+    "missing_output_contract": (
+        "missing output",
+        "output contract",
+        "final artifact",
+    ),
+    "weak_negative_cases": (
+        "negative case",
+        "skip prompt",
+        "adjacent task",
+    ),
+    "bad_eval_prompts": (
+        "bad eval",
+        "self-referential",
+        "eval prompt",
+    ),
+    "benchmark_regression": (
+        "benchmark regression",
+        "candidate lost",
+        "regression",
+    ),
+}
+_FEEDBACK_PATTERN_TO_STAGE = {
+    "stage_feedback": "slot_generator",
+    "reject_reason_feedback": "review_ux",
+    "history_failure_path": "slot_generator",
+    "missing_input_contract": "intent_brief",
+    "wrong_pattern": "pattern_picker",
+    "missed_existing_skill": "context_builder",
+    "overbroad_trigger": "slot_generator",
+    "missing_output_contract": "slot_generator",
+    "weak_negative_cases": "slot_generator",
+    "bad_eval_prompts": "slot_generator",
+    "benchmark_regression": "gate_calibration",
+    "rollback_after_accept": "slot_generator",
+    "review_summary_gap": "review_ux",
+}
 _NO_REQUIRED_IMPROVEMENTS = frozenset({"", "none", "no", "n/a", "not applicable"})
 _CREATOR_QUALITY_REQUIRED_MODES = frozenset({
     "FULL_GATED",
@@ -662,6 +753,97 @@ def _evaluate_runtime_e2e(
     }
 
 
+def _gate_problem(gate: dict) -> str:
+    for key in ("required_improvements", "reason", "diagnostics", "raw"):
+        value = gate.get(key)
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value if str(item).strip())
+        text = str(value or "").strip()
+        if text:
+            return text[:500]
+    return "gate did not pass"
+
+
+def _repair_hint_for_gate(gate_name: str, gate: dict) -> dict[str, object]:
+    problem = _gate_problem(gate)
+    if gate_name == "collision_check":
+        return {
+            "gate": gate_name,
+            "problem": problem,
+            "recommended_action": (
+                "Patch the proposal with narrower trigger phrases and an explicit "
+                "negative trigger boundary before accepting."
+            ),
+            "patch_operations": ["remove_triggers", "add_triggers"],
+        }
+    if gate_name == "acceptance_compare":
+        return {
+            "gate": gate_name,
+            "problem": problem,
+            "recommended_action": (
+                "Patch the generated SKILL.md to close the required improvements, "
+                "especially input parameters, output contract, and missing workflow "
+                "steps called out by the reviewer."
+            ),
+            "patch_operations": ["merge_output_contract", "append_body"],
+        }
+    if gate_name == "generation_quality":
+        return {
+            "gate": gate_name,
+            "problem": problem,
+            "recommended_action": (
+                "Regenerate or patch the candidate so every step has a concrete "
+                "purpose, bounded inputs, and a checkable final deliverable."
+            ),
+            "patch_operations": ["set_description", "append_body"],
+        }
+    if gate_name == "activation_eval":
+        return {
+            "gate": gate_name,
+            "problem": problem,
+            "recommended_action": (
+                "Patch triggers and negative examples so positive prompts route "
+                "to this skill while unrelated catalog prompts do not."
+            ),
+            "patch_operations": ["remove_triggers", "add_triggers", "append_eval_prompts"],
+        }
+    if gate_name == "runtime_e2e":
+        return {
+            "gate": gate_name,
+            "problem": problem,
+            "recommended_action": (
+                "Refresh runtime gates after patching the candidate workflow; if "
+                "cases still fail, simplify the step graph or add explicit inputs."
+            ),
+            "patch_operations": ["append_body"],
+        }
+    return {
+        "gate": gate_name,
+        "problem": problem,
+        "recommended_action": "Patch the proposal, then refresh gates before accepting.",
+        "patch_operations": ["append_body"],
+    }
+
+
+def _build_repair_hints(gates: dict) -> list[dict[str, object]]:
+    hints: list[dict[str, object]] = []
+    for gate_name in (
+        "collision_check",
+        "acceptance_compare",
+        "generation_quality",
+        "activation_eval",
+        "runtime_e2e",
+        "risk_classify",
+        "bundle_validation",
+    ):
+        gate = gates.get(gate_name)
+        if not isinstance(gate, dict):
+            continue
+        if gate.get("required") is True and gate.get("passed") is not True:
+            hints.append(_repair_hint_for_gate(gate_name, gate))
+    return hints
+
+
 def write_proposal(
     home: Path,
     skill_md: str,
@@ -741,6 +923,9 @@ def write_proposal(
         "bundle_validation": bundle_validation_gate,
         "auto_enable_eligible": eligible,
     }
+    repair_hints = _build_repair_hints(gates)
+    if repair_hints:
+        gates["repair_hints"] = repair_hints
     if normalised_bundle_files:
         gates["bundle"] = _bundle_manifest(normalised_bundle_files)
     proposal_id = atomic_write_proposal(
@@ -1873,6 +2058,66 @@ def _record_archived_deprecation(
     )
 
 
+def _creator_success_context_from_skill(skill_md: str, gates: dict) -> dict[str, str]:
+    """Extract compact, low-risk success context from an accepted skill."""
+    context: dict[str, str] = {}
+    try:
+        frontmatter, _body = _split_skill_markdown(skill_md)
+    except (ValueError, yaml.YAMLError):
+        frontmatter = {}
+    raw_triggers = frontmatter.get("triggers")
+    if isinstance(raw_triggers, list):
+        triggers = [_learning_text(item, max_chars=120) for item in raw_triggers]
+    elif isinstance(raw_triggers, str):
+        triggers = [_learning_text(raw_triggers, max_chars=120)]
+    else:
+        triggers = []
+    triggers = [trigger for trigger in triggers if trigger]
+    if triggers:
+        context["trigger_samples"] = " | ".join(triggers[:3])
+    raw_steps = (
+        frontmatter.get("composition", {}).get("steps")
+        if isinstance(frontmatter.get("composition"), dict)
+        else []
+    )
+    if isinstance(raw_steps, list):
+        chain = []
+        for step in raw_steps:
+            if not isinstance(step, dict):
+                continue
+            skill = _learning_text(step.get("skill"), max_chars=80)
+            if skill:
+                chain.append(skill)
+            if len(chain) >= 6:
+                break
+        if chain:
+            context["skill_chain"] = " -> ".join(chain)
+    metadata = frontmatter.get("metadata")
+    opensquilla_meta = (
+        metadata.get("opensquilla")
+        if isinstance(metadata, dict) and isinstance(metadata.get("opensquilla"), dict)
+        else {}
+    )
+    creator_pattern = _learning_text(
+        opensquilla_meta.get("creator_pattern")
+        or opensquilla_meta.get("selected_pattern"),
+        max_chars=80,
+    )
+    if creator_pattern:
+        context["selected_pattern"] = creator_pattern
+    passed_gate_names = [
+        name
+        for name, gate in gates.items()
+        if isinstance(gate, dict) and gate.get("passed") is True
+    ]
+    if passed_gate_names:
+        context["passed_gate_names"] = ", ".join(sorted(passed_gate_names))
+    creator_mode = _learning_text(gates.get("creator_mode"), max_chars=80)
+    if creator_mode:
+        context["creator_mode"] = creator_mode
+    return context
+
+
 def accept_proposal(
     home: Path,
     proposal_id: str,
@@ -2000,6 +2245,7 @@ def accept_proposal(
             "skill_name": name,
             "outcome": "accepted",
             "reason": "replace" if replace else "accept",
+            **_creator_success_context_from_skill(skill_md, gates),
         },
     )
     return result
@@ -2150,7 +2396,17 @@ def rollback_skill(home: Path, name: str) -> dict:
     return result
 
 
-def reject_proposal(home: Path, proposal_id: str) -> dict:
+def reject_proposal(
+    home: Path,
+    proposal_id: str,
+    *,
+    reason: str = "",
+    stage: str = "",
+    task_class: str = "",
+    selected_pattern: str = "",
+    preferred_pattern: str = "",
+    review_signal: str = "",
+) -> dict:
     """Delete the proposal directory. Idempotent — re-deleting is fine."""
     if not is_valid_proposal_id(proposal_id):
         return {
@@ -2162,8 +2418,81 @@ def reject_proposal(home: Path, proposal_id: str) -> dict:
     target = proposals_dir(home) / proposal_id
     if not target.is_dir():
         return {"status": "error", "reason": f"proposal {proposal_id} not found"}
+    skill_name = ""
+    skill_path = target / "SKILL.md"
+    if skill_path.is_file():
+        try:
+            skill_md = skill_path.read_text(encoding="utf-8")
+        except OSError:
+            skill_md = ""
+        name_match = re.search(r'^name:\s*"?([\w\-]+)"?\s*$', skill_md, re.MULTILINE)
+        if name_match:
+            skill_name = name_match.group(1)
     shutil.rmtree(target)
+    if any((
+        reason,
+        stage,
+        task_class,
+        selected_pattern,
+        preferred_pattern,
+        review_signal,
+    )):
+        event: dict[str, object] = {
+            "event_type": "failed",
+            "proposal_id": proposal_id,
+            "source": "reject_proposal",
+            "reason": reason or "rejected proposal",
+        }
+        if skill_name:
+            event["skill_name"] = skill_name
+        if stage:
+            event["stage"] = stage
+        if task_class:
+            event["task_class"] = task_class
+        if selected_pattern:
+            event["selected_pattern"] = selected_pattern
+        if preferred_pattern:
+            event["preferred_pattern"] = preferred_pattern
+        if review_signal:
+            event["review_signal"] = review_signal
+        _safe_record_creator_learning_event(home, event)
     return {"status": "ok", "proposal_id": proposal_id}
+
+
+def record_creator_history_failure_feedback(home: Path, failure_path: object) -> dict:
+    """Record a compact historical failure path as creator feedback."""
+    if not isinstance(failure_path, dict):
+        return {"status": "error", "reason": "invalid_failure_path"}
+    stage = _learning_text(failure_path.get("failed_stage"), max_chars=80)
+    if stage not in _CREATOR_FEEDBACK_STAGES:
+        stage = "slot_generator"
+    task_class = _learning_text(failure_path.get("task_class_hint"), max_chars=120)
+    failed_step = _learning_text(failure_path.get("failed_step_id"), max_chars=80)
+    failed_skill = _learning_text(failure_path.get("failed_skill"), max_chars=120)
+    error_family = _learning_text(failure_path.get("error_family"), max_chars=80)
+    sample_reason = _learning_text(failure_path.get("sample_reason"))
+    had_fallback = bool(failure_path.get("had_fallback"))
+    fallback_clause = (
+        "had fallback"
+        if had_fallback
+        else "without fallback"
+    )
+    reason_parts = [
+        "historical failed step",
+        failed_step,
+        f"skill {failed_skill}" if failed_skill else "",
+        f"error family {error_family}" if error_family else "",
+        fallback_clause,
+        sample_reason,
+    ]
+    event = {
+        "event_type": "failed",
+        "source": "history_failure_path",
+        "stage": stage,
+        "task_class": task_class or "global",
+        "reason": "; ".join(part for part in reason_parts if part),
+    }
+    return record_creator_learning_event(home, event)
 
 
 def _learning_text(value: object, *, max_chars: int = 300) -> str:
@@ -2207,9 +2536,626 @@ def _read_creator_learning_events(home: Path, *, max_events: int = 200) -> list[
     return rows
 
 
+def _lesson_pattern_for_event(event: dict) -> str | None:
+    event_type = str(event.get("event_type") or "")
+    reason = _learning_text(event.get("reason")).lower()
+    outcome = _learning_text(event.get("outcome")).lower()
+    haystack = f"{reason} {outcome}"
+    if event_type == "rolled_back":
+        if (
+            "overbroad" in haystack
+            or "trigger" in haystack
+            or "collision" in haystack
+        ):
+            return "overbroad_trigger"
+        return "rollback_after_accept"
+    if event_type == "benchmarked" and event.get("passed") is False:
+        return "benchmark_regression"
+    for pattern, keywords in _LESSON_PATTERN_KEYWORDS.items():
+        if any(keyword in haystack for keyword in keywords):
+            return pattern
+    return None
+
+
+def _lesson_recommendation(pattern: str) -> tuple[str, str, dict]:
+    if pattern == "overbroad_trigger":
+        return (
+            "Generated trigger caught adjacent or generic requests.",
+            (
+                "Require action/domain nouns in triggers and add "
+                "catalog-adjacent skip eval prompts."
+            ),
+            {
+                "append_eval_prompts": [{
+                    "name": "negative_adjacent_generic_request",
+                    "prompt": "summarize this generic note",
+                    "expect": "skip",
+                }],
+            },
+        )
+    if pattern == "missing_input_contract":
+        return (
+            "Generated candidate did not preserve required inputs.",
+            (
+                "Preserve INPUT_CONTRACT in description, step tasks, "
+                "rationale, and eval prompts."
+            ),
+            {"merge_output_contract": {"inputs_required": ["source material"]}},
+        )
+    if pattern == "missing_output_contract":
+        return (
+            "Generated candidate did not preserve the expected final artifact.",
+            (
+                "Preserve OUTPUT_CONTRACT with concrete final sections and "
+                "completion evidence."
+            ),
+            {"merge_output_contract": {"required_sections": ["Result", "Evidence"]}},
+        )
+    if pattern == "weak_negative_cases":
+        return (
+            "Generated candidate lacks useful negative-space examples.",
+            "Mirror NEGATIVE_CASES into skip eval prompts before activation gates.",
+            {
+                "append_eval_prompts": [{
+                    "name": "negative_nearby_non_target",
+                    "prompt": "handle a nearby request that should not use this workflow",
+                    "expect": "skip",
+                }],
+            },
+        )
+    if pattern == "bad_eval_prompts":
+        return (
+            "Eval prompts are not realistic future-user requests.",
+            (
+                "Rewrite eval prompts as natural user requests with activate "
+                "or skip expectations."
+            ),
+            {
+                "append_eval_prompts": [{
+                    "name": "negative_self_reference",
+                    "prompt": "explain how this skill works",
+                    "expect": "skip",
+                }],
+            },
+        )
+    if pattern == "benchmark_regression":
+        return (
+            "A candidate revision regressed against the benchmark baseline.",
+            "Turn the losing benchmark case into a fixed eval prompt before retrying.",
+            {
+                "append_eval_prompts": [{
+                    "name": "negative_regression_replay",
+                    "prompt": "replay the benchmark regression case",
+                    "expect": "skip",
+                }],
+            },
+        )
+    return (
+        "Accepted skill was rolled back after promotion.",
+        "Treat the rolled-back proposal as negative evidence before generating siblings.",
+        {},
+    )
+
+
+def _creator_feedback_pattern_for_event(event: dict) -> str | None:
+    event_type = str(event.get("event_type") or "")
+    source = _learning_text(event.get("source"), max_chars=80)
+    explicit_stage = _learning_text(
+        event.get("target_stage") or event.get("stage"),
+        max_chars=80,
+    )
+    reason = _learning_text(event.get("reason")).lower()
+    outcome = _learning_text(event.get("outcome")).lower()
+    review_signal = _learning_text(event.get("review_signal"), max_chars=80)
+    lessons = " ".join(_learning_lessons(event.get("lessons"))).lower()
+    haystack = f"{reason} {outcome} {lessons}"
+    if source == "history_failure_path":
+        return "history_failure_path"
+    if explicit_stage in _CREATOR_FEEDBACK_STAGES and not any(
+        keyword in haystack
+        for keyword in (
+            "wrong pattern",
+            "should use fan-out",
+            "should use fan out",
+            "preferred pattern",
+            "existing skill",
+            "skill overlap",
+            "catalog context",
+            "duplicate sibling",
+            "not what the user meant",
+            "intent boundary",
+            "missing intent",
+            "wrong task",
+            "gate missed",
+            "eval corpus",
+            "overbroad",
+            "trigger",
+            "input contract",
+            "output contract",
+            "negative case",
+            "eval prompt",
+            "regression",
+            "rollback",
+        )
+    ):
+        return "stage_feedback"
+    if (
+        "wrong pattern" in haystack
+        or "should use fan-out" in haystack
+        or "should use fan out" in haystack
+        or "preferred pattern" in haystack
+    ):
+        return "wrong_pattern"
+    if (
+        "existing skill" in haystack
+        or "skill overlap" in haystack
+        or "catalog context" in haystack
+        or "duplicate sibling" in haystack
+    ):
+        return "missed_existing_skill"
+    if "review" in haystack and (
+        "summary" in haystack
+        or "could not judge" in haystack
+        or "hard to judge" in haystack
+    ):
+        return "review_summary_gap"
+    if (
+        "not what the user meant" in haystack
+        or "intent boundary" in haystack
+        or "missing intent" in haystack
+        or "wrong task" in haystack
+    ):
+        return "missing_input_contract"
+    if (
+        event_type == "benchmarked"
+        and event.get("passed") is False
+        or "gate missed" in haystack
+        or "eval corpus" in haystack
+    ):
+        return "benchmark_regression"
+    if review_signal == "reject_reason":
+        return "reject_reason_feedback"
+    return _lesson_pattern_for_event(event)
+
+
+def _creator_feedback_stage_for_pattern(pattern: str) -> str:
+    return _FEEDBACK_PATTERN_TO_STAGE.get(pattern, "slot_generator")
+
+
+def _creator_feedback_stage_for_event(event: dict, pattern: str) -> str:
+    explicit = _learning_text(
+        event.get("target_stage") or event.get("stage"),
+        max_chars=80,
+    )
+    if explicit in _CREATOR_FEEDBACK_STAGES:
+        return explicit
+    return _creator_feedback_stage_for_pattern(pattern)
+
+
+def _creator_feedback_stage_recommendation(stage: str) -> tuple[str, str]:
+    if stage == "intent_brief":
+        return (
+            "Intent understanding failed before generation.",
+            (
+                "Clarify TASK_CLASS, INPUT_CONTRACT, OUTPUT_CONTRACT, and "
+                "boundary cases before selecting a pattern."
+            ),
+        )
+    if stage == "pattern_picker":
+        return (
+            "Pattern selection likely chose the wrong workflow shape.",
+            (
+                "Use this as preferred pattern evidence before fill-slots; "
+                "compare sequential, fan-out, and gated modes explicitly."
+            ),
+        )
+    if stage == "context_builder":
+        return (
+            "Creator missed relevant catalog or history context.",
+            (
+                "Include nearby existing skills and overlap evidence before "
+                "pattern selection and slot generation."
+            ),
+        )
+    if stage == "gate_calibration":
+        return (
+            "A gate or benchmark failed to catch a meaningful regression early enough.",
+            (
+                "Turn the failed benchmark or missed gate case into fixed eval "
+                "corpus coverage before retrying."
+            ),
+        )
+    if stage == "review_ux":
+        return (
+            "Human review did not provide enough decision context.",
+            (
+                "Show task class, trigger boundary, negative cases, gate "
+                "evidence, and summary before raw SKILL.md."
+            ),
+        )
+    return (
+        "Generated slots need stronger capability boundaries.",
+        (
+            "Revise triggers, input/output contracts, negative cases, eval "
+            "prompts, and rationale before assembly."
+        ),
+    )
+
+
+def _creator_feedback_stage_hint(stage: str) -> str:
+    if stage == "intent_brief":
+        return "Feed into clarify_intent / intent brief before pattern selection."
+    if stage == "pattern_picker":
+        return "Feed into pattern picker as advisory preferred pattern evidence."
+    if stage == "context_builder":
+        return "Feed into context builder so nearby skills and history are visible."
+    if stage == "gate_calibration":
+        return "Feed into gate calibration and benchmark replay, not direct skill edits."
+    if stage == "review_ux":
+        return "Feed into proposal review summary and decision UI."
+    return "Feed into fill-slots and slot critic as generation-quality guidance."
+
+
+def _feedback_patterns_sorted(patterns: set[str]) -> list[str]:
+    order = {pattern: index for index, pattern in enumerate(_CREATOR_FEEDBACK_PATTERN_ORDER)}
+    return sorted(patterns, key=lambda pattern: (order.get(pattern, 999), pattern))
+
+
+def _creator_feedback_next_run_controls(bucket: dict) -> dict:
+    stage = str(bucket["stage"])
+    patterns = set(bucket["source_patterns"])
+    reasons = " ".join(str(reason).lower() for reason in bucket["reasons"])
+    controls: dict[str, object] = {}
+    if stage == "intent_brief":
+        controls["require_intent_brief"] = True
+        controls["require_task_class"] = True
+        controls["require_input_contract"] = True
+        controls["require_output_contract"] = True
+    elif stage == "pattern_picker":
+        preferred_patterns = sorted(bucket["preferred_patterns"])
+        selected_patterns = sorted(bucket["selected_patterns"])
+        if preferred_patterns:
+            controls["preferred_pattern"] = preferred_patterns[0]
+        if selected_patterns:
+            controls["avoid_patterns"] = selected_patterns
+        controls["compare_patterns_explicitly"] = True
+    elif stage == "context_builder":
+        controls["include_nearby_existing_skills"] = True
+        controls["require_overlap_rationale"] = True
+        if "history_failure_path" in patterns or "failed step" in reasons:
+            controls["require_tool_preconditions"] = True
+        if "without fallback" in reasons or "had no fallback" in reasons:
+            controls["require_fallback_plan"] = True
+    elif stage == "gate_calibration":
+        controls["replay_benchmark_cases"] = True
+        controls["strengthen_eval_corpus"] = True
+    elif stage == "review_ux":
+        controls["show_review_summary_first"] = True
+        controls["include_gate_evidence_summary"] = True
+    else:
+        if "missing_input_contract" in patterns or "input contract" in reasons:
+            controls["require_input_contract"] = True
+        if "missing_output_contract" in patterns or "output contract" in reasons:
+            controls["require_output_contract"] = True
+        if "weak_negative_cases" in patterns or "negative case" in reasons:
+            controls["require_negative_cases"] = True
+        if "overbroad_trigger" in patterns or "trigger" in reasons:
+            controls["require_narrow_triggers"] = True
+            controls["require_negative_eval_prompts"] = True
+    return controls
+
+
+def creator_feedback_cards(home: Path, *, max_events: int = 200, limit: int = 8) -> dict:
+    """Return workflow-stage feedback cards derived from creator events."""
+    events = _read_creator_learning_events(home, max_events=max_events)
+    buckets: dict[tuple[str, str], dict] = {}
+    for event in events:
+        pattern = _creator_feedback_pattern_for_event(event)
+        if pattern is None:
+            continue
+        stage = _creator_feedback_stage_for_event(event, pattern)
+        task_class = _learning_text(event.get("task_class"), max_chars=120)
+        key = (stage, task_class)
+        bucket = buckets.setdefault(
+            key,
+            {
+                "stage": stage,
+                "task_class": task_class,
+                "source_patterns": set(),
+                "sources": set(),
+                "proposal_ids": set(),
+                "selected_patterns": set(),
+                "preferred_patterns": set(),
+                "gate_names": set(),
+                "reasons": [],
+                "evidence_count": 0,
+            },
+        )
+        bucket["evidence_count"] += 1
+        bucket["source_patterns"].add(pattern)
+        source = _learning_text(event.get("source"), max_chars=80)
+        bucket["sources"].add(source or str(event.get("event_type") or ""))
+        reason = _learning_text(event.get("reason"))
+        if reason and reason not in bucket["reasons"]:
+            bucket["reasons"].append(reason)
+        selected_pattern = _learning_text(event.get("selected_pattern"), max_chars=80)
+        if selected_pattern:
+            bucket["selected_patterns"].add(selected_pattern)
+        preferred_pattern = _learning_text(event.get("preferred_pattern"), max_chars=80)
+        if preferred_pattern:
+            bucket["preferred_patterns"].add(preferred_pattern)
+        gate_name = _learning_text(event.get("gate_name"), max_chars=80)
+        if gate_name:
+            bucket["gate_names"].add(gate_name)
+        for field in _CREATOR_LEARNING_PROPOSAL_FIELDS:
+            value = _learning_text(event.get(field), max_chars=32)
+            if is_valid_proposal_id(value):
+                bucket["proposal_ids"].add(value)
+
+    cards: list[dict] = []
+    for bucket in buckets.values():
+        stage = str(bucket["stage"])
+        problem, recommendation = _creator_feedback_stage_recommendation(stage)
+        evidence_count = int(bucket["evidence_count"])
+        confidence = (
+            "high"
+            if evidence_count >= 3
+            else "medium"
+            if evidence_count >= 2
+            else "low"
+        )
+        task_class = str(bucket["task_class"] or "global")
+        cards.append({
+            "feedback_id": f"{stage}:{task_class}:{evidence_count}",
+            "stage": stage,
+            "applies_to_task_class": task_class,
+            "confidence": confidence,
+            "evidence_count": evidence_count,
+            "source_patterns": _feedback_patterns_sorted(bucket["source_patterns"]),
+            "sources": sorted(source for source in bucket["sources"] if source),
+            "proposal_ids": sorted(bucket["proposal_ids"]),
+            "selected_patterns": sorted(bucket["selected_patterns"]),
+            "preferred_patterns": sorted(bucket["preferred_patterns"]),
+            "gate_names": sorted(bucket["gate_names"]),
+            "problem": problem,
+            "recommendation": recommendation,
+            "stage_hint": _creator_feedback_stage_hint(stage),
+            "next_run_controls": _creator_feedback_next_run_controls(bucket),
+            "blocked_actions": [
+                "direct_installed_skill_edit",
+                "bypass_proposal_gates",
+            ],
+            "sample_reasons": bucket["reasons"][:3],
+        })
+    stage_order = {stage: index for index, stage in enumerate(_CREATOR_FEEDBACK_STAGES)}
+    cards.sort(
+        key=lambda item: (
+            stage_order.get(str(item["stage"]), 999),
+            -int(item["evidence_count"]),
+            str(item["stage"]),
+        ),
+    )
+    return {"status": "ok", "feedback_cards": cards[:limit], "event_count": len(events)}
+
+
+def _creator_success_pattern_for_event(event: dict) -> str | None:
+    event_type = str(event.get("event_type") or "")
+    if event_type == "accepted":
+        return "accepted_skill"
+    if event_type == "benchmarked" and event.get("passed") is True:
+        return "benchmark_win"
+    return None
+
+
+def _split_learning_samples(value: object, *, max_items: int = 5) -> list[str]:
+    text = _learning_text(value)
+    if not text:
+        return []
+    parts = [
+        _learning_text(part, max_chars=120)
+        for part in re.split(r"\s*(?:\||,)\s*", text)
+    ]
+    return [part for part in parts if part][:max_items]
+
+
+def _creator_success_next_run_controls(bucket: dict) -> dict:
+    controls: dict[str, object] = {}
+    selected_patterns = sorted(bucket["selected_patterns"])
+    if selected_patterns:
+        controls["prefer_successful_pattern"] = selected_patterns[0]
+    if bucket["trigger_samples"]:
+        controls["reuse_successful_trigger_style"] = True
+    if bucket["skill_chains"]:
+        controls["reuse_successful_skill_chain"] = True
+    if bucket["passed_gate_names"]:
+        controls["preserve_successful_gate_coverage"] = True
+    return controls
+
+
+def creator_success_pattern_cards(
+    home: Path,
+    *,
+    max_events: int = 200,
+    limit: int = 8,
+) -> dict:
+    """Return reusable positive recipes from accepted and winning events."""
+    events = _read_creator_learning_events(home, max_events=max_events)
+    buckets: dict[tuple[str, str], dict] = {}
+    for event in events:
+        pattern = _creator_success_pattern_for_event(event)
+        if pattern is None:
+            continue
+        task_class = _learning_text(event.get("task_class"), max_chars=120)
+        selected_pattern = _learning_text(event.get("selected_pattern"), max_chars=80)
+        key = (task_class, selected_pattern)
+        bucket = buckets.setdefault(
+            key,
+            {
+                "task_class": task_class,
+                "source_patterns": set(),
+                "sources": set(),
+                "proposal_ids": set(),
+                "skill_names": set(),
+                "selected_patterns": set(),
+                "trigger_samples": set(),
+                "skill_chains": set(),
+                "passed_gate_names": set(),
+                "reasons": [],
+                "evidence_count": 0,
+            },
+        )
+        bucket["evidence_count"] += 1
+        bucket["source_patterns"].add(pattern)
+        bucket["sources"].add(str(event.get("event_type") or ""))
+        skill_name = _learning_text(event.get("skill_name"), max_chars=80)
+        if skill_name:
+            bucket["skill_names"].add(skill_name)
+        if selected_pattern:
+            bucket["selected_patterns"].add(selected_pattern)
+        for sample in _split_learning_samples(event.get("trigger_samples")):
+            bucket["trigger_samples"].add(sample)
+        skill_chain = _learning_text(event.get("skill_chain"), max_chars=240)
+        if skill_chain:
+            bucket["skill_chains"].add(skill_chain)
+        for gate_name in _split_learning_samples(event.get("passed_gate_names")):
+            bucket["passed_gate_names"].add(gate_name)
+        reason = _learning_text(event.get("reason"))
+        if reason and reason not in bucket["reasons"]:
+            bucket["reasons"].append(reason)
+        for field in _CREATOR_LEARNING_PROPOSAL_FIELDS:
+            value = _learning_text(event.get(field), max_chars=32)
+            if is_valid_proposal_id(value):
+                bucket["proposal_ids"].add(value)
+
+    cards: list[dict] = []
+    for bucket in buckets.values():
+        evidence_count = int(bucket["evidence_count"])
+        confidence = (
+            "high"
+            if evidence_count >= 3
+            else "medium"
+            if evidence_count >= 2
+            else "low"
+        )
+        task_class = str(bucket["task_class"] or "global")
+        source_patterns = _feedback_patterns_sorted(bucket["source_patterns"])
+        cards.append({
+            "success_id": f"{task_class}:{evidence_count}",
+            "applies_to_task_class": task_class,
+            "confidence": confidence,
+            "evidence_count": evidence_count,
+            "source_patterns": source_patterns,
+            "sources": sorted(source for source in bucket["sources"] if source),
+            "proposal_ids": sorted(bucket["proposal_ids"]),
+            "skill_names": sorted(bucket["skill_names"]),
+            "selected_patterns": sorted(bucket["selected_patterns"]),
+            "trigger_samples": sorted(bucket["trigger_samples"]),
+            "skill_chains": sorted(bucket["skill_chains"]),
+            "passed_gate_names": sorted(bucket["passed_gate_names"]),
+            "positive_signal": (
+                "Accepted or benchmark-winning meta-skill pattern matched "
+                "this task class."
+            ),
+            "recommendation": (
+                "Reuse this as a positive recipe only when the current "
+                "TASK_CLASS and contracts match."
+            ),
+            "prompt_hint": (
+                "Apply as a positive recipe: preserve the successful trigger "
+                "style, workflow shape, skill chain, and gate coverage when "
+                "they fit the current request."
+            ),
+            "next_run_controls": _creator_success_next_run_controls(bucket),
+            "sample_reasons": bucket["reasons"][:3],
+        })
+    cards.sort(
+        key=lambda item: (
+            -int(item["evidence_count"]),
+            str(item["applies_to_task_class"]),
+            str(item["selected_patterns"]),
+        ),
+    )
+    return {
+        "status": "ok",
+        "success_pattern_cards": cards[:limit],
+        "event_count": len(events),
+    }
+
+
+def creator_lesson_cards(home: Path, *, max_events: int = 200, limit: int = 8) -> dict:
+    """Return ranked lesson cards derived from sanitized creator events."""
+    events = _read_creator_learning_events(home, max_events=max_events)
+    buckets: dict[tuple[str, str, str], dict] = {}
+    for event in events:
+        pattern = _lesson_pattern_for_event(event)
+        if pattern is None:
+            continue
+        skill_name = _learning_text(event.get("skill_name"), max_chars=80)
+        reason = _learning_text(event.get("reason"))
+        key = (pattern, skill_name, reason)
+        bucket = buckets.setdefault(
+            key,
+            {
+                "pattern": pattern,
+                "skill_name": skill_name,
+                "reason": reason,
+                "sources": set(),
+                "proposal_ids": set(),
+                "evidence_count": 0,
+            },
+        )
+        bucket["evidence_count"] += 1
+        bucket["sources"].add(str(event.get("event_type") or ""))
+        for field in _CREATOR_LEARNING_PROPOSAL_FIELDS:
+            value = _learning_text(event.get(field), max_chars=32)
+            if is_valid_proposal_id(value):
+                bucket["proposal_ids"].add(value)
+
+    cards: list[dict] = []
+    for bucket in buckets.values():
+        problem, recommendation, patch_hint = _lesson_recommendation(bucket["pattern"])
+        evidence_count = int(bucket["evidence_count"])
+        confidence = (
+            "high"
+            if evidence_count >= 3
+            else "medium"
+            if evidence_count >= 2
+            else "low"
+        )
+        identity = bucket["skill_name"] or bucket["reason"] or "global"
+        cards.append({
+            "lesson_id": f"{bucket['pattern']}:{identity}:{evidence_count}",
+            "pattern": bucket["pattern"],
+            "confidence": confidence,
+            "evidence_count": evidence_count,
+            "sources": sorted(source for source in bucket["sources"] if source),
+            "proposal_ids": sorted(bucket["proposal_ids"]),
+            "skill_name": bucket["skill_name"],
+            "problem": problem,
+            "recommendation": recommendation,
+            "prompt_hint": recommendation,
+            "patch_hint": patch_hint,
+        })
+    cards.sort(
+        key=lambda item: (
+            -int(item["evidence_count"]),
+            item["pattern"],
+            item["skill_name"],
+        ),
+    )
+    return {"status": "ok", "lesson_cards": cards[:limit], "event_count": len(events)}
+
+
 def creator_learning_summary(home: Path, *, max_events: int = 200) -> dict:
     """Return compact advisory memory from sanitized creator learning events."""
     events = _read_creator_learning_events(home, max_events=max_events)
+    cards_result = creator_lesson_cards(home, max_events=max_events)
+    feedback_result = creator_feedback_cards(home, max_events=max_events)
+    success_result = creator_success_pattern_cards(home, max_events=max_events)
+    feedback_by_stage: dict[str, list[dict]] = {}
+    for card in feedback_result["feedback_cards"]:
+        stage = str(card.get("stage") or "slot_generator")
+        feedback_by_stage.setdefault(stage, []).append(card)
     counts = {event_type: 0 for event_type in sorted(_CREATOR_LEARNING_EVENT_TYPES)}
     lessons: list[str] = []
     rollback_reasons: list[str] = []
@@ -2251,6 +3197,10 @@ def creator_learning_summary(home: Path, *, max_events: int = 200) -> dict:
         "path": str(creator_learning_events_path(home)),
         "event_count": len(events),
         "counts": counts,
+        "lesson_cards": cards_result["lesson_cards"],
+        "feedback_cards": feedback_result["feedback_cards"],
+        "feedback_by_stage": feedback_by_stage,
+        "success_pattern_cards": success_result["success_pattern_cards"],
         "summary": " ".join(parts),
     }
 
@@ -2372,9 +3322,12 @@ __all__ = [
     "audit_proposal_drift",
     "auto_enable_audit_from_gates",
     "auto_propose_settings_path",
+    "creator_feedback_cards",
     "creator_learning_dir",
     "creator_learning_events_path",
+    "creator_lesson_cards",
     "creator_learning_summary",
+    "creator_success_pattern_cards",
     "disable_auto_enabled_skill",
     "is_valid_proposal_id",
     "list_auto_enabled_skills",
@@ -2383,6 +3336,7 @@ __all__ = [
     "pending_count",
     "proposals_dir",
     "read_auto_propose_settings",
+    "record_creator_history_failure_feedback",
     "record_creator_learning_event",
     "refresh_proposal_gates",
     "reject_proposal",

@@ -14,6 +14,7 @@ attachments) without dragging the scheduler in.
 from __future__ import annotations
 
 import html
+import json
 import re
 from typing import Any
 
@@ -90,6 +91,70 @@ def _filter_int(value: object, default: int = 0) -> int:
         return default
 
 
+def _normalise_structured_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().casefold()).strip("_")
+
+
+def _normalise_structured_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(_normalise_structured_value(item) for item in value).strip()
+    return str(value).strip().casefold()
+
+
+def _dict_structured_field(payload: dict[Any, Any], field: str) -> str:
+    wanted = _normalise_structured_key(field)
+    for key, value in payload.items():
+        if _normalise_structured_key(key) == wanted:
+            return _normalise_structured_value(value)
+    return ""
+
+
+def _filter_intent_field(value: object, field: str) -> str:
+    """Extract a classifier field from JSON or KEY: value text.
+
+    LLMs often vary between YAML-like lines, pretty JSON, minified JSON, and
+    lower-case keys. This filter keeps route guards semantic instead of
+    depending on one exact string layout.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    candidates = [text]
+    if "{" in text and "}" in text:
+        candidates.append(text[text.find("{"):text.rfind("}") + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            found = _dict_structured_field(parsed, field)
+            if found:
+                return found
+
+    wanted = _normalise_structured_key(field)
+    for raw_line in text.splitlines():
+        line = raw_line.strip().strip(",")
+        if not line:
+            continue
+        match = re.match(
+            r"^[\"']?(?P<key>[A-Za-z0-9 _-]+)[\"']?\s*[:=]\s*(?P<value>.+?)\s*,?$",
+            line,
+        )
+        if not match:
+            continue
+        if _normalise_structured_key(match.group("key")) != wanted:
+            continue
+        raw_value = match.group("value").strip().strip("'\"")
+        return _normalise_structured_value(raw_value)
+    return ""
+
+
 def _build_jinja_env() -> jinja2.sandbox.ImmutableSandboxedEnvironment:
     # ``ImmutableSandboxedEnvironment`` blocks Python attribute introspection
     # (``__class__`` / ``__mro__`` / ``__subclasses__``) and mutation
@@ -119,6 +184,7 @@ def _build_jinja_env() -> jinja2.sandbox.ImmutableSandboxedEnvironment:
         "extract_path": _filter_extract_path,
         "contains_cjk": _filter_contains_cjk,
         "int": _filter_int,
+        "intent_field": _filter_intent_field,
     }
     return env
 

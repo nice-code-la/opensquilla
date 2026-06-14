@@ -39,6 +39,10 @@ CLAIM_NEEDLES = {
             "opensquilla skills meta proposals benchmark",
         ),
     ),
+    "repair_hints_visible_in_webui": (
+        "src/opensquilla/gateway/static/js/views/skills.js",
+        ("Recommended repairs", "_renderProposalRepairHints", "repair_hints"),
+    ),
     "review_context_visible_in_approvals": (
         "src/opensquilla/gateway/static/js/views/approvals.js",
         ("_approvalContext", "reason", "risk", "source"),
@@ -119,6 +123,7 @@ def _proposal_evidence(home: Path, row: dict[str, Any]) -> dict[str, Any]:
         "auto_enable_eligible": bool(row.get("auto_enable_eligible")),
         "dry_run_sample": dry_run_sample,
         "gate_blockers": _gate_blockers(gates),
+        "repair_hints": _repair_hints(gates),
         "next_actions": {
             action: f"opensquilla skills meta proposals {action} {proposal_id}"
             for action in ACTION_NAMES
@@ -169,6 +174,26 @@ def _gate_blockers(gates: dict[str, Any]) -> list[dict[str, str]]:
             "detail": _gate_detail(gate_name, gate),
         })
     return blockers
+
+
+def _repair_hints(gates: dict[str, Any]) -> list[dict[str, Any]]:
+    hints = gates.get("repair_hints")
+    if not isinstance(hints, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in hints:
+        if not isinstance(item, dict):
+            continue
+        cleaned.append({
+            "gate": str(item.get("gate") or ""),
+            "problem": str(item.get("problem") or ""),
+            "recommended_action": str(item.get("recommended_action") or ""),
+            "patch_operations": [
+                str(op) for op in item.get("patch_operations", [])
+                if str(op).strip()
+            ] if isinstance(item.get("patch_operations"), list) else [],
+        })
+    return cleaned
 
 
 def _gate_detail(gate_name: str, gate: dict[str, Any]) -> str:

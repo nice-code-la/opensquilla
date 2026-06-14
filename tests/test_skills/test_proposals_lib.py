@@ -84,6 +84,48 @@ def test_write_then_list_then_pending_count(tmp_path: Path) -> None:
     assert proposals_lib.pending_count(home) == {"count": 2}
 
 
+def test_write_proposal_records_actionable_repair_hints_for_failed_creator_gates(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        _skill_md("repairable-proposal", "review", "Repairable proposal"),
+        GATES_PASSING,
+        SMOKE_PASSING,
+        creator_mode="FULL_GATED",
+        collision_result=(
+            "REVISE_NEEDED\n"
+            "- trigger 'review' is broad and can steal unrelated intent"
+        ),
+        acceptance_result=(
+            "WINNER: single-model\n"
+            "QUALITY_SCORE: 0.52\n"
+            "REQUIRED_IMPROVEMENTS:\n"
+            "- add explicit input parameters and output contract"
+        ),
+        runtime_e2e_result=json.dumps({"passed": True, "winner": "meta", "cases": []}),
+        risk_result="RISK: low\nCAPABILITIES:\n- summarize\nREQUIRED_GATES:\n- none",
+        generation_quality_result=json.dumps({"passed": True, "reason": "ok"}),
+        activation_result=json.dumps({"passed": True, "reason": "ok"}),
+    )
+
+    shown = proposals_lib.show_proposal(home, result["proposal_id"])
+    hints = shown["gates"]["repair_hints"]
+
+    assert [hint["gate"] for hint in hints] == [
+        "collision_check",
+        "acceptance_compare",
+    ]
+    assert hints[0]["patch_operations"] == ["remove_triggers", "add_triggers"]
+    assert "narrow" in hints[0]["recommended_action"]
+    assert hints[1]["patch_operations"] == [
+        "merge_output_contract",
+        "append_body",
+    ]
+    assert "explicit input parameters" in hints[1]["problem"]
+
+
 def test_audit_proposal_drift_reports_stale_collision_and_rollback_heavy(
     tmp_path: Path,
 ) -> None:
@@ -205,6 +247,391 @@ def test_audit_proposal_drift_reports_repeated_learning_signals(
     assert issue["reason"] == "overbroad trigger"
     assert issue["event_count"] == 2
     assert audit["counts"]["repeated_learning_signals"] == 1
+
+
+def test_creator_lesson_cards_classify_repeated_overbroad_trigger(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    for proposal_id in ("abcd1234", "deadbeef"):
+        proposals_lib.record_creator_learning_event(
+            home,
+            {
+                "event_type": "rolled_back",
+                "proposal_id": proposal_id,
+                "skill_name": "fragile-skill",
+                "reason": "overbroad trigger caught generic summarize requests",
+            },
+        )
+
+    cards = proposals_lib.creator_lesson_cards(home)["lesson_cards"]
+
+    assert cards[0]["pattern"] == "overbroad_trigger"
+    assert cards[0]["confidence"] == "medium"
+    assert cards[0]["evidence_count"] == 2
+    assert cards[0]["skill_name"] == "fragile-skill"
+    assert "action/domain nouns" in cards[0]["recommendation"]
+    assert cards[0]["patch_hint"]["append_eval_prompts"][0]["expect"] == "skip"
+    assert cards[0]["sources"] == ["rolled_back"]
+
+
+def test_creator_lesson_cards_classify_input_contract_and_benchmark_regression(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "failed",
+            "proposal_id": "abcd1234",
+            "skill_name": "contract-skill",
+            "reason": "missing input contract for required source PDFs",
+        },
+    )
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "benchmarked",
+            "baseline_proposal_id": "abcd1234",
+            "candidate_proposal_id": "deadbeef",
+            "benchmark_id": "01234567",
+            "passed": False,
+            "reason": "candidate introduced benchmark regression",
+        },
+    )
+
+    cards = proposals_lib.creator_lesson_cards(home)["lesson_cards"]
+    patterns = {card["pattern"] for card in cards}
+
+    assert "missing_input_contract" in patterns
+    assert "benchmark_regression" in patterns
+    input_card = [
+        card for card in cards
+        if card["pattern"] == "missing_input_contract"
+    ][0]
+    assert "INPUT_CONTRACT" in input_card["prompt_hint"]
+    regression_card = [
+        card for card in cards
+        if card["pattern"] == "benchmark_regression"
+    ][0]
+    assert regression_card["patch_hint"]["append_eval_prompts"][0]["expect"] == "skip"
+
+
+def test_creator_feedback_cards_route_signals_to_workflow_stages(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    events = [
+        {
+            "event_type": "failed",
+            "proposal_id": "11111111",
+            "reason": "not what the user meant; missing intent boundary",
+        },
+        {
+            "event_type": "failed",
+            "proposal_id": "22222222",
+            "reason": "wrong pattern p1 sequential; should use fan-out merge",
+        },
+        {
+            "event_type": "failed",
+            "proposal_id": "33333333",
+            "reason": "missed existing skill overlap in catalog context",
+        },
+        {
+            "event_type": "rolled_back",
+            "proposal_id": "44444444",
+            "skill_name": "fragile-skill",
+            "reason": "overbroad trigger caught generic summarize requests",
+        },
+        {
+            "event_type": "benchmarked",
+            "baseline_proposal_id": "55555555",
+            "candidate_proposal_id": "66666666",
+            "passed": False,
+            "reason": "gate missed benchmark regression; eval corpus too weak",
+        },
+        {
+            "event_type": "failed",
+            "proposal_id": "77777777",
+            "reason": "review UI summary insufficient; reviewer could not judge",
+        },
+    ]
+    for event in events:
+        proposals_lib.record_creator_learning_event(home, event)
+
+    cards = proposals_lib.creator_feedback_cards(home)["feedback_cards"]
+    stages = {card["stage"]: card for card in cards}
+
+    assert stages["intent_brief"]["source_patterns"] == ["missing_input_contract"]
+    assert "clarify" in stages["intent_brief"]["stage_hint"]
+    assert stages["pattern_picker"]["source_patterns"] == ["wrong_pattern"]
+    assert "preferred pattern" in stages["pattern_picker"]["recommendation"]
+    assert stages["context_builder"]["source_patterns"] == ["missed_existing_skill"]
+    assert stages["slot_generator"]["source_patterns"] == ["overbroad_trigger"]
+    assert stages["gate_calibration"]["source_patterns"] == [
+        "benchmark_regression"
+    ]
+    assert stages["review_ux"]["source_patterns"] == ["review_summary_gap"]
+
+
+def test_creator_feedback_cards_scope_by_task_class_and_emit_controls(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "failed",
+            "proposal_id": "11111111",
+            "stage": "pattern_picker",
+            "task_class": "multi-source research synthesis",
+            "selected_pattern": "p1_sequential",
+            "preferred_pattern": "p2_fan_out_merge",
+            "reason": "wrong pattern for independent source analysis",
+        },
+    )
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "failed",
+            "proposal_id": "22222222",
+            "stage": "slot_generator",
+            "task_class": "decision briefs from source docs",
+            "reason": "missing output contract and weak negative cases",
+        },
+    )
+
+    cards = proposals_lib.creator_feedback_cards(home)["feedback_cards"]
+    by_task = {
+        (card["stage"], card["applies_to_task_class"]): card
+        for card in cards
+    }
+
+    pattern_card = by_task[("pattern_picker", "multi-source research synthesis")]
+    assert pattern_card["selected_patterns"] == ["p1_sequential"]
+    assert pattern_card["preferred_patterns"] == ["p2_fan_out_merge"]
+    assert pattern_card["next_run_controls"]["preferred_pattern"] == "p2_fan_out_merge"
+    assert pattern_card["next_run_controls"]["avoid_patterns"] == ["p1_sequential"]
+
+    slot_card = by_task[("slot_generator", "decision briefs from source docs")]
+    assert slot_card["next_run_controls"]["require_output_contract"] is True
+    assert slot_card["next_run_controls"]["require_negative_cases"] is True
+    assert slot_card["blocked_actions"] == [
+        "direct_installed_skill_edit",
+        "bypass_proposal_gates",
+    ]
+
+
+def test_creator_feedback_cards_keep_explicit_stage_feedback_without_keywords(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "failed",
+            "proposal_id": "33333333",
+            "stage": "review_ux",
+            "task_class": "decision briefs from source docs",
+            "reason": "too little context for a confident approval",
+        },
+    )
+
+    cards = proposals_lib.creator_feedback_cards(home)["feedback_cards"]
+
+    assert cards[0]["stage"] == "review_ux"
+    assert cards[0]["applies_to_task_class"] == "decision briefs from source docs"
+    assert cards[0]["source_patterns"] == ["stage_feedback"]
+    assert cards[0]["next_run_controls"]["show_review_summary_first"] is True
+
+
+def test_creator_feedback_cards_keep_generic_reject_reason_feedback(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "failed",
+            "proposal_id": "44444444",
+            "review_signal": "reject_reason",
+            "reason": "not useful enough to approve",
+        },
+    )
+
+    cards = proposals_lib.creator_feedback_cards(home)["feedback_cards"]
+
+    assert cards[0]["stage"] == "review_ux"
+    assert cards[0]["source_patterns"] == ["reject_reason_feedback"]
+    assert cards[0]["next_run_controls"]["show_review_summary_first"] is True
+
+
+def test_record_creator_history_failure_feedback_feeds_next_generation(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+
+    out = proposals_lib.record_creator_history_failure_feedback(
+        home,
+        {
+            "source": "decision_log",
+            "task_class_hint": "generate operational summary from history",
+            "failed_step_id": "harvest",
+            "failed_skill": "history-explorer",
+            "failed_stage": "context_builder",
+            "error_family": "timeout",
+            "had_fallback": False,
+            "sample_reason": "history-explorer command timed out",
+            "count": 2,
+        },
+    )
+
+    assert out["status"] == "ok"
+    summary = proposals_lib.creator_learning_summary(home)
+    card = summary["feedback_by_stage"]["context_builder"][0]
+    assert card["applies_to_task_class"] == "generate operational summary from history"
+    assert card["source_patterns"] == ["history_failure_path"]
+    assert card["sources"] == ["history_failure_path"]
+    assert card["next_run_controls"]["include_nearby_existing_skills"] is True
+    assert card["next_run_controls"]["require_tool_preconditions"] is True
+    assert card["next_run_controls"]["require_fallback_plan"] is True
+    assert "timed out" in card["sample_reasons"][0]
+
+
+def test_creator_success_pattern_cards_learn_positive_generation_recipes(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "accepted",
+            "proposal_id": "11111111",
+            "skill_name": "decision-brief-pipeline",
+            "task_class": "decision briefs from source docs",
+            "selected_pattern": "p1_sequential",
+            "trigger_samples": "decision brief from source docs",
+            "skill_chain": "summarize -> summarize",
+            "passed_gate_names": "lint, smoke, generation_quality",
+            "reason": "accepted",
+        },
+    )
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "benchmarked",
+            "candidate_proposal_id": "22222222",
+            "baseline_proposal_id": "33333333",
+            "benchmark_id": "44444444",
+            "passed": True,
+            "task_class": "decision briefs from source docs",
+            "selected_pattern": "p1_sequential",
+            "reason": "candidate won on groundedness",
+        },
+    )
+
+    summary = proposals_lib.creator_learning_summary(home)
+    card = summary["success_pattern_cards"][0]
+
+    assert card["applies_to_task_class"] == "decision briefs from source docs"
+    assert card["source_patterns"] == ["accepted_skill", "benchmark_win"]
+    assert card["selected_patterns"] == ["p1_sequential"]
+    assert card["skill_chains"] == ["summarize -> summarize"]
+    assert card["trigger_samples"] == ["decision brief from source docs"]
+    assert card["next_run_controls"]["reuse_successful_trigger_style"] is True
+    assert card["next_run_controls"]["prefer_successful_pattern"] == "p1_sequential"
+    assert "positive recipe" in card["prompt_hint"]
+
+
+def test_accept_proposal_records_success_context_for_future_creator_runs(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    result = proposals_lib.write_proposal(
+        home,
+        SAMPLE_SKILL_MD,
+        GATES_PASSING,
+        SMOKE_PASSING,
+    )
+    assert result["status"] == "ok"
+
+    accepted = proposals_lib.accept_proposal(home, result["proposal_id"])
+
+    assert accepted["status"] == "ok"
+    summary = proposals_lib.creator_learning_summary(home)
+    card = summary["success_pattern_cards"][0]
+    assert card["skill_names"] == ["synth-test-pipeline"]
+    assert card["trigger_samples"] == ["synth test trigger"]
+    assert card["skill_chains"] == ["summarize"]
+
+
+def test_reject_proposal_records_stage_feedback_for_next_generation(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposal_id = _seed_proposal(home)
+
+    out = proposals_lib.reject_proposal(
+        home,
+        proposal_id,
+        reason="reviewer selected wrong pattern for independent source analysis",
+        stage="pattern_picker",
+        task_class="multi-source research synthesis",
+        selected_pattern="p1_sequential",
+        preferred_pattern="p2_fan_out_merge",
+    )
+
+    assert out["status"] == "ok"
+    summary = proposals_lib.creator_learning_summary(home)
+    card = summary["feedback_by_stage"]["pattern_picker"][0]
+    assert card["applies_to_task_class"] == "multi-source research synthesis"
+    assert card["proposal_ids"] == [proposal_id]
+    assert card["next_run_controls"]["preferred_pattern"] == "p2_fan_out_merge"
+    assert card["next_run_controls"]["avoid_patterns"] == ["p1_sequential"]
+
+
+def test_creator_learning_summary_includes_ranked_lesson_cards(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "rolled_back",
+            "proposal_id": "abcd1234",
+            "skill_name": "fragile-skill",
+            "reason": "overbroad trigger",
+        },
+    )
+
+    summary = proposals_lib.creator_learning_summary(home)
+
+    assert summary["status"] == "ok"
+    assert summary["lesson_cards"][0]["pattern"] == "overbroad_trigger"
+    assert "Creator learning counts:" in summary["summary"]
+
+
+def test_creator_learning_summary_includes_stage_feedback_cards(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".opensquilla"
+    proposals_lib.record_creator_learning_event(
+        home,
+        {
+            "event_type": "failed",
+            "proposal_id": "22222222",
+            "reason": "wrong pattern p1 sequential; should use fan-out merge",
+        },
+    )
+
+    summary = proposals_lib.creator_learning_summary(home)
+
+    assert summary["status"] == "ok"
+    assert summary["feedback_cards"][0]["stage"] == "pattern_picker"
+    assert summary["feedback_cards"][0]["source_patterns"] == ["wrong_pattern"]
+    assert summary["feedback_by_stage"]["pattern_picker"][0]["stage"] == (
+        "pattern_picker"
+    )
 
 
 def test_record_creator_learning_event_writes_sanitized_jsonl(tmp_path: Path) -> None:

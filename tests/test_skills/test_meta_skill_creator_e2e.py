@@ -327,18 +327,60 @@ def test_creator_dag_forwards_optional_learning_summary_to_fill_slots() -> None:
     assert learning_summary.kind == "tool_call"
     assert learning_summary.tool == "meta_skill_creator_learning_summary"
     assert learning_summary.depends_on == ("creator_mode",)
+    history_feedback = steps["history_failure_feedback"]
+    assert history_feedback.kind == "tool_call"
+    assert history_feedback.tool == "meta_skill_import_history_failure_feedback"
+    assert history_feedback.depends_on == ("harvest",)
+    assert history_feedback.tool_args["history_json"] == (
+        "{{ outputs.harvest | default('') }}"
+    )
+
+    assert "learning_summary" in steps["pick_pattern"].depends_on
+    assert "history_failure_feedback" in steps["pick_pattern"].depends_on
+    pick_pattern_intent = str(steps["pick_pattern"].with_args["user_intent"])
+    assert "Workflow-stage feedback" in pick_pattern_intent
+    assert "pattern picker" in pick_pattern_intent
 
     assert "learning_summary" in steps["fill_slots"].depends_on
+    assert "history_failure_feedback" in steps["fill_slots"].depends_on
+    assert steps["fill_slots"].tool_args["creator_feedback_json"] == (
+        '{{ outputs.history_failure_feedback | default(outputs.learning_summary | '
+        'default(inputs.creator_learning_summary | default(""))) }}'
+    )
     fill_slots_intent = str(steps["fill_slots"].tool_args["user_intent"])
     assert "Creator learning summary" in fill_slots_intent
     expected_summary_template = (
-        '{{ outputs.learning_summary | default(inputs.creator_learning_summary | '
-        'default("")) | xml_escape | truncate(2000) }}'
+        '{{ outputs.history_failure_feedback | default(outputs.learning_summary | '
+        'default(inputs.creator_learning_summary | default(""))) | xml_escape | '
+        'truncate(3000) }}'
     )
     assert (
         expected_summary_template in fill_slots_intent
     )
     assert "advisory memory" in fill_slots_intent
+    assert "Lesson cards may suggest safer triggers" in fill_slots_intent
+    assert "Success pattern cards may suggest positive recipes" in fill_slots_intent
+    assert "bypass proposal gates" in fill_slots_intent
+
+
+def test_creator_dag_harvests_failure_paths_as_creator_feedback() -> None:
+    from opensquilla.skills.loader import SkillLoader
+
+    spec = SkillLoader(bundled_dir=BUNDLED).get_by_name("meta-skill-creator")
+    assert spec is not None
+    plan = parse_meta_plan(spec)
+    assert plan is not None
+    steps = {step.id: step for step in plan.steps}
+
+    assert "failure_paths" in steps["harvest"].with_args["include"]
+    assert steps["history_failure_feedback"].tool == (
+        "meta_skill_import_history_failure_feedback"
+    )
+    pick_pattern_intent = str(steps["pick_pattern"].with_args["user_intent"])
+    fill_slots_intent = str(steps["fill_slots"].tool_args["user_intent"])
+    assert "Historical failure paths" in pick_pattern_intent
+    assert "Historical failure paths" in fill_slots_intent
+    assert "fallback" in fill_slots_intent
 
 
 def test_creator_dag_generates_optional_bundle_assets_before_persist() -> None:
@@ -402,6 +444,31 @@ def test_creator_route_guards_accept_json_clarify_output() -> None:
         steps["creator_mode"].when,
         inputs={},
         outputs={"clarify_intent": json_clarify},
+    ) is True
+
+    for variant in (
+        '{"ROUTE":"meta-skill","NEEDS_CLARIFICATION":"no"}',
+        '{"route":"meta-skill","needs_clarification":"no"}',
+        '{ "route" : "meta-skill", "needs_clarification" : "no" }',
+    ):
+        assert evaluate_when(
+            steps["creator_mode"].when,
+            inputs={},
+            outputs={"clarify_intent": variant},
+        ) is True
+
+    minified_clarify = '{"route":"meta-skill","needs_clarification":"yes"}'
+    assert evaluate_when(
+        steps["creator_clarify"].when,
+        inputs={},
+        outputs={"clarify_intent": minified_clarify},
+    ) is True
+
+    normal_skill_json = '{"route":"normal-skill","needs_clarification":"no"}'
+    assert evaluate_when(
+        steps["normal_skill_exit"].when,
+        inputs={},
+        outputs={"clarify_intent": normal_skill_json},
     ) is True
 
 

@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import structlog
+import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import ValidationError
 
@@ -348,6 +349,18 @@ def _build_pattern_example(pattern_id: str) -> dict:
             "description": "A 2-step example that extracts PDF text then summarizes it.",
             "meta_priority": 50,
             "triggers": ["example trigger phrase"],
+            "eval_prompts": [
+                {
+                    "name": "positive_example_pipeline",
+                    "prompt": "please run the example trigger phrase workflow",
+                    "expect": "activate",
+                },
+                {
+                    "name": "negative_generic_summary",
+                    "prompt": "please summarize this unrelated note",
+                    "expect": "skip",
+                },
+            ],
             "steps": [
                 {
                     "id": "extract",
@@ -371,6 +384,18 @@ def _build_pattern_example(pattern_id: str) -> dict:
             ),
             "meta_priority": 50,
             "triggers": ["example fan-out trigger"],
+            "eval_prompts": [
+                {
+                    "name": "positive_fan_out",
+                    "prompt": "please run the example fan-out trigger workflow",
+                    "expect": "activate",
+                },
+                {
+                    "name": "negative_single_summary",
+                    "prompt": "summarize this single note without travel planning",
+                    "expect": "skip",
+                },
+            ],
             "branches": [
                 {"id": "weather", "skill": "weather", "task": "Fetch weather", "with_keys": {}},
                 {
@@ -397,6 +422,18 @@ def _build_pattern_example(pattern_id: str) -> dict:
             ),
             "meta_priority": 50,
             "triggers": ["example gated trigger"],
+            "eval_prompts": [
+                {
+                    "name": "positive_gated_pipeline",
+                    "prompt": "please run the example gated trigger workflow",
+                    "expect": "activate",
+                },
+                {
+                    "name": "negative_simple_answer",
+                    "prompt": "answer this quick general question",
+                    "expect": "skip",
+                },
+            ],
             "steps": [
                 {
                     "id": "intake",
@@ -567,11 +604,180 @@ def _format_draft_seed_context(draft_seed_json: str) -> str:
     return json.dumps(evidence, ensure_ascii=False, indent=2, default=str)
 
 
+def _format_lesson_cards_context(draft_seed_json: str) -> str:
+    """Return bounded creator lesson cards from draft_seed_json."""
+    raw = str(draft_seed_json or "").strip()
+    if not raw:
+        return "[]"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return "[]"
+    cards = parsed.get("lesson_cards") if isinstance(parsed, dict) else None
+    if not isinstance(cards, list):
+        return "[]"
+
+    safe_cards: list[dict[str, object]] = []
+    for card in cards[:8]:
+        if not isinstance(card, dict):
+            continue
+        patch_hint = card.get("patch_hint")
+        safe_cards.append({
+            "pattern": _truncate_draft_seed_text(str(card.get("pattern") or ""), 80),
+            "confidence": _truncate_draft_seed_text(
+                str(card.get("confidence") or ""),
+                20,
+            ),
+            "recommendation": _truncate_draft_seed_text(
+                str(card.get("recommendation") or ""),
+                300,
+            ),
+            "prompt_hint": _truncate_draft_seed_text(
+                str(card.get("prompt_hint") or ""),
+                300,
+            ),
+            "patch_hint": (
+                _cap_draft_seed_value(patch_hint, max_chars=300)
+                if isinstance(patch_hint, dict)
+                else {}
+            ),
+        })
+    return json.dumps(safe_cards, ensure_ascii=False, indent=2, default=str)
+
+
+def _format_feedback_cards_context(creator_feedback_json: str) -> str:
+    """Return bounded workflow-stage feedback cards from learning summary JSON."""
+    raw = str(creator_feedback_json or "").strip()
+    if not raw:
+        return "[]"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return "[]"
+    cards = parsed.get("feedback_cards") if isinstance(parsed, dict) else None
+    if not isinstance(cards, list):
+        return "[]"
+
+    safe_cards: list[dict[str, object]] = []
+    for card in cards[:8]:
+        if not isinstance(card, dict):
+            continue
+        source_patterns = card.get("source_patterns")
+        next_run_controls = card.get("next_run_controls")
+        blocked_actions = card.get("blocked_actions")
+        safe_cards.append({
+            "stage": _truncate_draft_seed_text(str(card.get("stage") or ""), 80),
+            "applies_to_task_class": _truncate_draft_seed_text(
+                str(card.get("applies_to_task_class") or "global"),
+                140,
+            ),
+            "confidence": _truncate_draft_seed_text(
+                str(card.get("confidence") or ""),
+                20,
+            ),
+            "evidence_count": card.get("evidence_count")
+            if isinstance(card.get("evidence_count"), int)
+            else 0,
+            "source_patterns": (
+                _cap_draft_seed_value(source_patterns, max_chars=80)
+                if isinstance(source_patterns, list)
+                else []
+            ),
+            "recommendation": _truncate_draft_seed_text(
+                str(card.get("recommendation") or ""),
+                320,
+            ),
+            "stage_hint": _truncate_draft_seed_text(
+                str(card.get("stage_hint") or ""),
+                220,
+            ),
+            "next_run_controls": (
+                _cap_draft_seed_value(next_run_controls, max_chars=360)
+                if isinstance(next_run_controls, dict)
+                else {}
+            ),
+            "blocked_actions": (
+                _cap_draft_seed_value(blocked_actions, max_chars=80)
+                if isinstance(blocked_actions, list)
+                else []
+            ),
+        })
+    return json.dumps(safe_cards, ensure_ascii=False, indent=2, default=str)
+
+
+def _format_success_pattern_cards_context(creator_feedback_json: str) -> str:
+    """Return bounded positive recipe cards from learning summary JSON."""
+    raw = str(creator_feedback_json or "").strip()
+    if not raw:
+        return "[]"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return "[]"
+    cards = parsed.get("success_pattern_cards") if isinstance(parsed, dict) else None
+    if not isinstance(cards, list):
+        return "[]"
+
+    safe_cards: list[dict[str, object]] = []
+    for card in cards[:8]:
+        if not isinstance(card, dict):
+            continue
+        next_run_controls = card.get("next_run_controls")
+        safe_cards.append({
+            "applies_to_task_class": _truncate_draft_seed_text(
+                str(card.get("applies_to_task_class") or "global"),
+                140,
+            ),
+            "confidence": _truncate_draft_seed_text(
+                str(card.get("confidence") or ""),
+                20,
+            ),
+            "evidence_count": card.get("evidence_count")
+            if isinstance(card.get("evidence_count"), int)
+            else 0,
+            "source_patterns": _cap_draft_seed_value(
+                card.get("source_patterns")
+                if isinstance(card.get("source_patterns"), list)
+                else [],
+                max_chars=80,
+            ),
+            "selected_patterns": _cap_draft_seed_value(
+                card.get("selected_patterns")
+                if isinstance(card.get("selected_patterns"), list)
+                else [],
+                max_chars=80,
+            ),
+            "trigger_samples": _cap_draft_seed_value(
+                card.get("trigger_samples")
+                if isinstance(card.get("trigger_samples"), list)
+                else [],
+                max_chars=120,
+            ),
+            "skill_chains": _cap_draft_seed_value(
+                card.get("skill_chains")
+                if isinstance(card.get("skill_chains"), list)
+                else [],
+                max_chars=160,
+            ),
+            "prompt_hint": _truncate_draft_seed_text(
+                str(card.get("prompt_hint") or ""),
+                320,
+            ),
+            "next_run_controls": (
+                _cap_draft_seed_value(next_run_controls, max_chars=360)
+                if isinstance(next_run_controls, dict)
+                else {}
+            ),
+        })
+    return json.dumps(safe_cards, ensure_ascii=False, indent=2, default=str)
+
+
 def meta_skill_fill_slots(
     pattern_id: str,
     history_summary: str,
     user_intent: str,
     draft_seed_json: str = "",
+    creator_feedback_json: str = "",
 ) -> str:
     """Drive LLM to fill pattern slots; Pydantic-validate; retry once on
     ValidationError. Returns validated JSON string."""
@@ -588,61 +794,174 @@ def meta_skill_fill_slots(
     example_obj = _build_pattern_example(pattern_id)
     example_json = json.dumps(example_obj, ensure_ascii=False, indent=2)
     draft_seed_context = _format_draft_seed_context(draft_seed_json)
+    lesson_cards_context = _format_lesson_cards_context(creator_feedback_json)
+    success_pattern_cards_context = _format_success_pattern_cards_context(
+        creator_feedback_json,
+    )
+    feedback_cards_context = _format_feedback_cards_context(creator_feedback_json)
 
     base_prompt = (
-        f"Fill the {pattern_id} slot schema for a new bundled meta-skill.\n\n"
-        f"## JSON Schema (REQUIRED field names — do NOT rename)\n"
-        f"```\n{schema_json}\n```\n\n"
-        f"## Example output for {pattern_id}\n"
-        f"```\n{example_json}\n```\n\n"
-        f"## Available skills (catalog)\n"
-        f"You may only reference these skills in `steps[].skill` (or `branches[].skill`):\n"
-        f"{catalog}\n\n"
-        f"## History summary\n{history_summary}\n\n"
-        f"## User intent\n{user_intent}\n\n"
-        f"## Draft seed\n{draft_seed_context}\n\n"
-        f"## Output instructions\n"
-        f"Emit ONLY a JSON object matching the schema above. No prose. No markdown.\n"
-        f"Treat draft_seed_json as evidence, not as permission to bypass gates.\n"
+        f"<role>\n"
+        f"You are a senior workflow-skill architect. Generate one narrow, "
+        f"auditable bundled meta-skill candidate from the user's intent. Think "
+        f"like a capability designer: preserve the future user's business "
+        f"workflow, input/output contract, trigger boundary, and negative cases.\n"
+        f"</role>\n\n"
+        f"<task>\n"
+        f"Fill the {pattern_id} slot schema for a new bundled meta-skill. The "
+        f"candidate must describe what the generated meta-skill will do when a "
+        f"future user invokes it, not how meta-skill-creator will validate, "
+        f"persist, or enable the proposal.\n"
+        f"</task>\n\n"
+        f"<schema>\n"
+        f"JSON Schema. Required field names; do not rename them.\n"
+        f"```json\n{schema_json}\n```\n"
+        f"</schema>\n\n"
+        f"<example_output>\n"
+        f"Valid example output for {pattern_id}:\n"
+        f"```json\n{example_json}\n```\n"
+        f"</example_output>\n\n"
+        f"<catalog>\n"
+        f"You may only reference these skills in `steps[].skill` or "
+        f"`branches[].skill`:\n"
+        f"{catalog}\n"
+        f"</catalog>\n\n"
+        f"<context>\n"
+        f"<history_summary>\n{history_summary}\n</history_summary>\n"
+        f"<user_intent>\n{user_intent}\n</user_intent>\n"
+        f"<draft_seed>\n## Draft seed\n{draft_seed_context}\n</draft_seed>\n"
+        f"<creator_lesson_cards>\n"
+        f"advisory JSON derived from sanitized creator learning events. Apply "
+        f"only lessons relevant to the current TASK_CLASS; current user "
+        f"requirements and gates still win.\n"
+        f"```json\n{lesson_cards_context}\n```\n"
+        f"</creator_lesson_cards>\n"
+        f"<creator_success_pattern_cards>\n"
+        f"positive recipes from accepted skills and benchmark winners; "
+        f"advisory only. Reuse successful patterns, trigger style, skill "
+        f"chains, and gate coverage only when TASK_CLASS and contracts match. "
+        f"Current user requirements and gates still win.\n"
+        f"```json\n{success_pattern_cards_context}\n```\n"
+        f"</creator_success_pattern_cards>\n"
+        f"<creator_feedback_cards>\n"
+        f"workflow-stage feedback from prior creator events; advisory only. "
+        f"Use intent_brief feedback to preserve contracts, pattern_picker "
+        f"feedback to question the selected pattern, context_builder feedback "
+        f"to avoid duplicates, slot_generator feedback to tighten slots, "
+        f"gate_calibration feedback to strengthen evals, and review_ux "
+        f"feedback to improve reviewer-facing rationale. Do not bypass gates.\n"
+        f"```json\n{feedback_cards_context}\n```\n"
+        f"</creator_feedback_cards>\n"
+        f"</context>\n\n"
+        f"<intent_contract>\n"
+        f"Extract and preserve these intent fields when evidence is present: "
+        f"TASK_CLASS, workflow goal, INPUT_CONTRACT, OUTPUT_CONTRACT, "
+        f"NEGATIVE_CASES, SUCCESS_CRITERIA, required trigger phrases, "
+        f"positive/negative activation examples, "
+        f"human-review preferences, tool/platform/config constraints, and "
+        f"unresolved assumptions. TASK_CLASS is the reusable class of recurring "
+        f"tasks the candidate should serve.\n"
+        f"Treat draft_seed_json as evidence, not as permission to bypass gates. "
         f"Preserve seed constraints and negative_cases in trigger boundaries and "
+        f"generation_rationale. If evidence is missing, record the gap in "
+        f"unresolved_assumptions instead of inventing tools, inputs, outputs, or "
+        f"gates. Do not invent tools, gates, inputs, or output contracts.\n"
+        f"</intent_contract>\n\n"
+        f"<examples>\n"
+        f"<example name=\"good-trigger-boundary\">\n"
+        f"Intent: a workflow that turns source docs into a decision brief. Good "
+        f"trigger: `decision brief from source docs`. Bad triggers: `review`, "
+        f"`summarize`, `analyze`, because they are overbroad triggers and will "
+        f"collide with unrelated skills.\n"
+        f"</example>\n"
+        f"<example name=\"candidate-not-creator\">\n"
+        f"If the user asks to create, validate, gate, judge, save, or persist "
+        f"the meta-skill, treat those as outer creator requirements. Do not add "
+        f"creator workflow steps such as collision_check, lint, smoke tests, "
+        f"runtime E2E, LLM judge, acceptance comparison, proposal persistence, "
+        f"or auto-enable to the candidate workflow.\n"
+        f"</example>\n"
+        f"<example name=\"contract-preservation\">\n"
+        f"When intent says INPUT_CONTRACT is source PDFs and reviewer notes, and "
+        f"OUTPUT_CONTRACT is a decision memo with cited constraints, the "
+        f"description, steps, and generation_rationale must preserve that shape. "
+        f"A generic document summary has a missing input/output contract.\n"
+        f"</example>\n"
+        f"<example name=\"class-first-scope\">\n"
+        f"Good scope: a reusable class of recurring tasks such as `decision "
+        f"briefs from source docs`. Bad scope: a single-session replica such as "
+        f"`the exact brief the user asked for today`. Name, describe, and "
+        f"trigger at the class level so the skill generalizes without catching "
+        f"unrelated work.\n"
+        f"</example>\n"
+        f"</examples>\n\n"
+        f"<quality_rubric>\n"
+        f"Before producing JSON, revise the candidate until it satisfies all of "
+        f"these checks:\n"
+        f"1. No overbroad triggers; every trigger contains domain/action nouns "
+        f"from the user's intended workflow.\n"
+        f"2. Scope is the class of recurring tasks, not a single-session replica.\n"
+        f"3. No missing input/output contract when the request supplies one.\n"
+        f"4. No creator workflow steps inside candidate steps.\n"
+        f"5. Every step uses a skill from the catalog and has a concrete task.\n"
+        f"6. Negative cases are excluded by trigger wording, description, and "
         f"generation_rationale.\n"
-        f"Separate the candidate workflow from the creator workflow:\n"
-        f"- Do not add steps for creator validation or proposal management. "
-        f"Collision checks, lint, smoke tests, runtime E2E, LLM judge, acceptance "
-        f"comparison, writing/saving/persisting a proposal, and auto-enable are "
-        f"handled by meta-skill-creator after this candidate is assembled.\n"
-        f"- If the user asks to create, validate, gate, judge, save, or persist "
-        f"the meta-skill, treat those as outer creator requirements, not as "
-        f"business steps inside the generated meta-skill.\n"
-        f"- Candidate steps should only describe what the new meta-skill will do "
-        f"when a future user invokes it.\n"
+        f"7. Conditional visibility metadata is filled only from explicit "
+        f"evidence.\n"
+        f"8. If the schema supports `eval_prompts`, include at least one "
+        f"positive activation prompt with expect=`activate` and one negative "
+        f"activation prompt with expect=`skip`.\n"
+        f"</quality_rubric>\n\n"
+        f"<field_rules>\n"
         f"Conditional visibility metadata rules:\n"
-        f"- Optional fields `requires_toolsets`, `fallback_for_tools`, `platforms`, "
-        f"and `config_keys` map to `metadata.opensquilla` in the generated "
-        f"frontmatter.\n"
-        f"- Fill these fields only when the user request or draft seed explicitly "
-        f"names required toolsets, fallback tools, supported platforms, or config "
-        f"keys. Do not invent conditional visibility requirements.\n"
+        f"- Optional fields `requires_toolsets`, `fallback_for_tools`, "
+        f"`platforms`, and `config_keys` map to `metadata.opensquilla` in the "
+        f"generated frontmatter.\n"
+        f"- Fill these fields only when the user request or draft seed "
+        f"explicitly names required toolsets, fallback tools, supported "
+        f"platforms, or config keys. Do not invent conditional visibility "
+        f"requirements.\n"
         f"- Leave them as empty lists when unspecified.\n"
+        f"Activation eval prompt rules:\n"
+        f"- Fill `eval_prompts` when the schema supports it.\n"
+        f"- Each `prompt` must be a natural future-user request, not a label or "
+        f"test description.\n"
+        f"- Positive activation prompts should express the TASK_CLASS and "
+        f"required trigger boundary.\n"
+        f"- Negative activation prompts should mirror NEGATIVE_CASES or nearby "
+        f"tasks that must not activate this skill.\n"
         f"Generation rationale rules:\n"
         f"- Include `generation_rationale` unless the schema rejects it.\n"
         f"- Set generation_rationale.selected_shape to `metaskill` for these "
         f"pattern schemas.\n"
-        f"- Set generation_rationale.selected_pattern to the exact pattern_id: {pattern_id}.\n"
-        f"- Fill source_evidence with request/history facts that justify the candidate.\n"
+        f"- Set generation_rationale.selected_pattern to the exact pattern_id: "
+        f"{pattern_id}.\n"
+        f"- Fill source_evidence with request/history facts that justify the "
+        f"candidate.\n"
         f"- Fill rejected_alternatives with at least one nearby shape or skill "
         f"and why it was not chosen.\n"
-        f"- Do not invent tools, gates, inputs, or output contracts. If evidence "
-        f"is missing, put the gap in unresolved_assumptions.\n"
-        f"CRITICAL field-name rules:\n"
-        f"- The list of phrases is called `triggers` (NOT `trigger_condition`).\n"
-        f"- If User intent names exact required trigger phrases, include those "
+        f"Critical field-name rules:\n"
+        f"- The list of phrases is called `triggers`, not `trigger_condition`.\n"
+        f"- If user intent names exact required trigger phrases, include those "
         f"phrases verbatim in `triggers` before adding optional synonyms.\n"
-        f"- The pipeline is called `steps` (NOT `execution_sequence`, `pipeline`, "
-        f"`actions`, or `sequence`).\n"
+        f"- The pipeline is called `steps`, not `execution_sequence`, "
+        f"`pipeline`, `actions`, or `sequence`.\n"
         f"- Each step must have: id (str, snake_case), skill (str from catalog), "
         f"task (str, max 400 chars, no double-quotes/newlines/backslashes), "
-        f"with_keys (dict, often empty {{}})."
+        f"with_keys (dict, often empty {{}}).\n"
+        f"</field_rules>\n\n"
+        f"<self_check>\n"
+        f"Privately answer before emitting JSON: Are triggers narrow? Is the "
+        f"candidate scoped to the class level rather than this one session? Is "
+        f"the input/output contract preserved? Are negative cases excluded? Are "
+        f"all skills from the catalog? Did you remove creator workflow steps? "
+        f"Does the JSON match the schema exactly? If any answer is no, repair "
+        f"the candidate before final output. Do not output the self-check.\n"
+        f"</self_check>\n\n"
+        f"<output>\n"
+        f"Emit ONLY a JSON object matching the schema above. No prose. No "
+        f"markdown. No code fences.\n"
+        f"</output>"
     )
 
     response = _call_llm_for_slots(base_prompt)
@@ -914,6 +1233,9 @@ def _activation_prompt_list(skill_md: str, raw: str, *, kind: str) -> list[str]:
     text = str(raw or "").strip()
     if text.lower() != "auto":
         return _json_array_or_lines(raw)
+    eval_prompts = _eval_prompts_from_frontmatter(skill_md, kind=kind)
+    if eval_prompts:
+        return eval_prompts
     if kind == "positive":
         return [_deterministic_fixture(skill_md, "positive")]
     if kind == "negative":
@@ -924,6 +1246,35 @@ def _activation_prompt_list(skill_md: str, raw: str, *, kind: str) -> list[str]:
             "explain how meta-skill-creator works",
         ]
     raise ValueError(f"Unknown activation prompt kind: {kind}")
+
+
+def _eval_prompts_from_frontmatter(skill_md: str, *, kind: str) -> list[str]:
+    expected = "activate" if kind == "positive" else "skip"
+    match = _re.match(r"^---\s*\n(?P<yaml>.*?)\n---(?:\n|$)", skill_md, _re.DOTALL)
+    if not match:
+        return []
+    try:
+        data = yaml.safe_load(match.group("yaml")) or {}
+    except yaml.YAMLError:
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    prompts: list[str] = []
+    seen: set[str] = set()
+    for item in data.get("eval_prompts") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("expect") or "").strip().lower() != expected:
+            continue
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt or prompt in seen:
+            continue
+        prompts.append(prompt)
+        seen.add(prompt)
+        if len(prompts) >= 8:
+            break
+    return prompts
 
 
 def _json_array_or_lines(raw: str) -> list[str]:
@@ -1238,6 +1589,34 @@ def meta_skill_creator_learning_summary(home: str = "") -> str:
     home_path = Path(home).expanduser() if home else default_opensquilla_home()
     result = creator_learning_summary(home_path)
     return json.dumps(result, ensure_ascii=False)
+
+
+def meta_skill_import_history_failure_feedback(
+    history_json: str = "",
+    home: str = "",
+) -> str:
+    """Import harvested failure paths into creator lifecycle memory."""
+    from opensquilla.paths import default_opensquilla_home
+    from opensquilla.skills.proposals_lib import (
+        creator_learning_summary,
+        record_creator_history_failure_feedback,
+    )
+
+    home_path = Path(home).expanduser() if home else default_opensquilla_home()
+    try:
+        payload = json.loads(history_json or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+    failure_paths = payload.get("failure_paths") if isinstance(payload, dict) else []
+    imported_count = 0
+    if isinstance(failure_paths, list):
+        for failure_path in failure_paths[:8]:
+            result = record_creator_history_failure_feedback(home_path, failure_path)
+            if result.get("status") == "ok":
+                imported_count += 1
+    summary = creator_learning_summary(home_path)
+    summary["history_failure_feedback"] = {"imported_count": imported_count}
+    return json.dumps(summary, ensure_ascii=False)
 
 
 def meta_skill_refresh_proposal_gates(
@@ -1738,6 +2117,32 @@ async def meta_skill_creator_learning_summary_tool(home: str = "") -> str:
 
 
 @tool(
+    name="meta_skill_import_history_failure_feedback",
+    description=(
+        "Import compact history-explorer failure_paths into creator "
+        "feedback memory. Returns updated learning summary JSON."
+    ),
+    params={
+        "history_json": {"type": "string"},
+        "home": {"type": "string"},
+    },
+    required=[],
+    exposed_by_default=False,
+)
+async def meta_skill_import_history_failure_feedback_tool(
+    history_json: str = "",
+    home: str = "",
+) -> str:
+    import asyncio
+
+    return await asyncio.to_thread(
+        meta_skill_import_history_failure_feedback,
+        history_json,
+        home,
+    )
+
+
+@tool(
     name="meta_skill_rollback_skill",
     description=(
         "Restore a managed skill from its recorded rollback target. Returns JSON."
@@ -1764,6 +2169,7 @@ _META_SKILL_FILL_SLOTS_PARAMS = {
     "history_summary": {"type": "string"},
     "user_intent": {"type": "string"},
     "draft_seed_json": {"type": "string"},
+    "creator_feedback_json": {"type": "string"},
 }
 _META_SKILL_FILL_SLOTS_REQUIRED = ["pattern_id", "history_summary", "user_intent"]
 
@@ -1848,6 +2254,7 @@ async def meta_skill_fill_slots_tool(
     history_summary: str,
     user_intent: str,
     draft_seed_json: str = "",
+    creator_feedback_json: str = "",
 ) -> str:
     # Run the sync core in a worker thread to avoid nested event loop conflict
     # when invoked from inside the orchestrator's running event loop.
@@ -1867,6 +2274,7 @@ async def meta_skill_fill_slots_tool(
                 history_summary,
                 user_intent,
                 draft_seed_json,
+                creator_feedback_json,
             )
         return await asyncio.to_thread(
             meta_skill_fill_slots,
@@ -1874,6 +2282,7 @@ async def meta_skill_fill_slots_tool(
             history_summary,
             user_intent,
             draft_seed_json,
+            creator_feedback_json,
         )
     except _FillSlotsValidationError as exc:
         return json.dumps(

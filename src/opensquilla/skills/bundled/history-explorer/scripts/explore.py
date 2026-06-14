@@ -29,6 +29,7 @@ if str(_OPENSQUILLA_ROOT.parent) not in sys.path:
 
 from opensquilla.observability.decision_log_aggregate import (  # noqa: E402
     aggregate_co_occurrences,
+    aggregate_failure_paths,
     aggregate_meta_usage,
 )
 
@@ -142,7 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--query", required=True)
     parser.add_argument("--window-days", type=int, default=30)
-    parser.add_argument("--include", default="co_occurrences,meta_usage,router_fixtures")
+    parser.add_argument(
+        "--include",
+        default="co_occurrences,meta_usage,router_fixtures",
+    )
     parser.add_argument("--top-k", type=int, default=10)
     args = parser.parse_args(argv)
 
@@ -159,10 +163,18 @@ def main(argv: list[str] | None = None) -> int:
         result["meta_usage"] = aggregate_meta_usage(
             log_dir, args.window_days, meta_names if meta_names else None
         )
+    if "failure_paths" in include:
+        result["failure_paths"] = aggregate_failure_paths(
+            log_dir, args.window_days, args.top_k
+        )
     if "router_fixtures" in include:
         result["router_fixtures"] = aggregate_router_fixtures()
 
-    if not result.get("co_occurrences") and not result.get("meta_usage"):
+    has_history = any(
+        bool(result.get(key))
+        for key in ("co_occurrences", "meta_usage", "failure_paths")
+    )
+    if not has_history:
         result["placeholder"] = "no history available; downstream should rely on user intent only"
 
     json.dump(result, sys.stdout, ensure_ascii=False)
