@@ -29,6 +29,14 @@ from opensquilla.contracts.turn_execution import (
     StickyExecutionRole,
     TurnExecutionContext,
 )
+from opensquilla.observability.piggyback.causality import (
+    schedule_candidates,
+    trace_aggregation,
+    trace_candidate,
+    trace_member_attempt,
+    trace_round,
+)
+from opensquilla.observability.piggyback.id_capture import provider_scope
 from opensquilla.router_tiers import (
     CUSTOM_B5_SELECTION_MODE,
     ROUTER_DYNAMIC_SELECTION_MODE,
@@ -432,6 +440,7 @@ def _surface_buffers_generation(
     )
 
 
+@trace_member_attempt
 async def _provider_stream_with_lifecycle(
     stream_factory: Callable[[], AsyncIterator[StreamEvent]],
     *,
@@ -594,6 +603,9 @@ def _generation_reset(
     ensemble_trace: dict[str, Any] | None = None,
 ) -> ProviderGenerationResetEvent:
     """Build the internal replacement signal without changing provider types."""
+    from opensquilla.observability.piggyback.identity_runtime import generation_reset
+
+    generation_reset(from_role, to_role, terminal)
 
     return ProviderGenerationResetEvent(
         from_role=from_role,
@@ -679,6 +691,7 @@ class _CandidateResult:
     attempt_index: int = 0
     retryable: bool = False
     retry_reason: str = ""
+    trace_origin: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def ok(self) -> bool:
@@ -2241,6 +2254,7 @@ class EnsembleProvider:
             model=str(item.get("model") or ""),
             text=text,
             stop_reason=str(item.get("stop_reason") or "stop"),
+            trace_origin=dict(item.get("trace_origin") or {}),
         )
 
     def _restore_sticky_state_from_context(
@@ -2354,7 +2368,10 @@ class EnsembleProvider:
         original = list(original_messages)
         if not original:
             return current
-        if len(current) >= len(original) and current[: len(original)] == original:
+        if len(current) >= len(original) and all(
+            left.business_dump() == right.business_dump()
+            for left, right in zip(current, original)
+        ):
             return current
         return [*original, *current]
 
@@ -2484,6 +2501,7 @@ class EnsembleProvider:
             raise RuntimeError("ensemble message-count projection unavailable")
         return max(projections, key=lambda projection: projection.actual_wire_messages)
 
+    @provider_scope
     def chat(
         self,
         messages: list[Message],
@@ -2516,6 +2534,7 @@ class EnsembleProvider:
             model=model,
         )
 
+    @trace_round
     async def _chat(
         self,
         messages: list[Message],
@@ -2837,6 +2856,7 @@ class EnsembleProvider:
                     "provider": candidate.provider,
                     "model": candidate.model,
                     "text": candidate.text,
+                    "trace_origin": candidate.trace_origin,
                 }
                 for candidate in successful
             )
@@ -2943,6 +2963,7 @@ class EnsembleProvider:
         execution_context: TurnExecutionContext | None = None,
         progress: Callable[[EnsembleProgressEvent], None] | None = None,
     ) -> list[_CandidateResult]:
+        schedule_candidates(self.proposers)
         tasks: list[asyncio.Task[_CandidateResult]] = []
         index = 0
         for member in self.proposers:
@@ -2987,8 +3008,12 @@ class EnsembleProvider:
                 for task in pending:
                     if task.done():
                         _consume_task_result(task)
+            from opensquilla.observability.piggyback.identity_runtime import scheduled_candidates_cancelled
+
+            scheduled_candidates_cancelled(tasks)
             raise
 
+    @trace_candidate
     async def _collect_candidate(
         self,
         *,
@@ -3478,6 +3503,7 @@ class EnsembleProvider:
         trace["final_request"] = final_request
         return trace
 
+    @trace_aggregation
     async def _stream_final_aggregator(
         self,
         *,
@@ -4183,6 +4209,7 @@ class EnsembleProvider:
         ):
             yield event
 
+    @trace_aggregation
     async def _stream_fixed_attempts(
         self,
         *,
@@ -4201,6 +4228,7 @@ class EnsembleProvider:
         logical_call_index: int = 0,
         phase: str = "ensemble_fixed_wait",
         message: str | None = None,
+        trace_candidates: Sequence[_CandidateResult] = (),
     ) -> AsyncIterator[StreamEvent]:
         """Run one fixed logical call with one transient retry at most."""
 
@@ -4921,6 +4949,7 @@ class EnsembleProvider:
             fixed_messages=fixed_messages,
             tools=tools,
             config=fallback_config or ChatConfig(),
+            trace_candidates=fixed_bundle,
             fixed_role=fixed_role,
             timeout_seconds=fallback_timeout_seconds,
             trace=trace,
@@ -5009,6 +5038,7 @@ class EnsembleProvider:
         fixed_config = self._fixed_chat_config(config, role=fixed_role)
         fixed_messages = continuation_messages
         fixed_bundle = self._fixed_candidate_bundle
+        trace_selected_candidates = ()
         if fixed_role == "fixed_aggregator" and fixed_bundle:
             fitted = self._fit_fixed_candidate_bundle(
                 provider,
@@ -5047,6 +5077,7 @@ class EnsembleProvider:
                 )
                 return
             _selected, fixed_messages, _proof = fitted
+            trace_selected_candidates = _selected
         timeout_seconds = float(
             getattr(fixed_config, "timeout", ChatConfig().timeout)
             if fixed_config is not None
@@ -5105,6 +5136,7 @@ class EnsembleProvider:
             fixed_messages=fixed_messages,
             tools=tools,
             config=fixed_config or ChatConfig(),
+            trace_candidates=trace_selected_candidates,
             fixed_role=fixed_role,
             timeout_seconds=timeout_seconds,
             trace=trace,

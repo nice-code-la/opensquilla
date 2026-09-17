@@ -47,6 +47,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from opensquilla.observability.piggyback.capture import emit as capture_emit
+
 if TYPE_CHECKING:
     from opensquilla.engine.agent import Agent
     from opensquilla.engine.hooks.types import CompactionHook
@@ -462,6 +464,7 @@ class CompactionAndHistoryStage:
         )
 
     async def _fire_before_compact(self, state: Any) -> None:
+        capture_emit("context.compaction_started", {"state": state})
         for hook in self._compaction_hooks:
             try:
                 await hook.before_compact(state)
@@ -471,6 +474,7 @@ class CompactionAndHistoryStage:
                 pass
 
     async def _fire_after_compact(self, state: Any, outcome: Any) -> None:
+        capture_emit("context.compaction_finished", {"state": state, "outcome": outcome})
         for hook in self._compaction_hooks:
             try:
                 await hook.after_compact(state, outcome)

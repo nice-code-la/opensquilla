@@ -30,6 +30,7 @@ from opensquilla.channels.types import (
     IncomingMessage,
     OutgoingMessage,
 )
+from opensquilla.observability.piggyback.capture import trace_delivery
 from opensquilla.paths import state_dir
 
 log = structlog.get_logger(__name__)
@@ -1054,6 +1055,7 @@ def durable_enqueue(channel: Any, message: IncomingMessage, queue: Any) -> bool:
     return True
 
 
+@trace_delivery
 async def deliver_with_outbox(channel: Any, message: OutgoingMessage) -> Any:
     """Persist a send intent and explicit terminal/unknown receipt."""
     store = getattr(channel, "_delivery_store", None)
@@ -1152,6 +1154,7 @@ def _redact_operation_error(
     return f"{type(error).__name__}: contextual artifact delivery failed"
 
 
+@trace_delivery
 async def deliver_operation_with_outbox(
     channel: Any,
     operation: str,

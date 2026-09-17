@@ -30,6 +30,9 @@ import structlog
 
 from opensquilla.engine.hooks import ToolHook, ToolHookCall, ToolHookResult
 from opensquilla.execution_status import normalize_execution_status
+from opensquilla.observability.piggyback.capture import emit as capture_emit
+from opensquilla.observability.piggyback.capture import trace_tool_handler
+from opensquilla.observability.piggyback.identity_runtime import trace_preflight
 from opensquilla.result_budget import (
     DEFAULT_TOOL_RESULT_BUDGET_POLICY,
     DEFAULT_TOOL_RUN_BUDGET_POLICY,
@@ -1165,6 +1168,7 @@ def _resolve_registry_miss(
     )
 
 
+@trace_preflight
 async def preflight_tool_call(
     *,
     registry: ToolRegistry,
@@ -1373,6 +1377,7 @@ def build_tool_handler(
         if executable_shape is not None:
             return executable_shape
 
+        capture_emit("tool.validated", {"name": tool_call.tool_name})
         # 3. ToolHook.before_tool — optional observability hook.
         hook_call = ToolHookCall(tool_call=tool_call, ctx=effective_ctx) if hooks else None
         if hook_call is not None:
@@ -1403,6 +1408,7 @@ def build_tool_handler(
 
         decision = run_chain_with_emit(dispatch_input, emit=_emit_policy_log)
         if not decision.allowed:
+            capture_emit("tool.denied", {"decision": decision})
             if decision.envelope is None:
                 raise RuntimeError("PolicyCheck returned a denial without an envelope")
             if hook_call is not None:
@@ -1484,6 +1490,10 @@ def build_tool_handler(
                     workspace=workspace,
                     run_mode=getattr(effective_ctx, "run_mode", None),
                 )
+                from opensquilla.observability.piggyback.identity_runtime import tool_enter
+
+                if sandbox_guard.denial_payload is None:
+                    tool_enter()
                 raw_result = await run_tool_handler_with_operation_guard(
                     registered.handler,
                     reservation.arguments,
@@ -1498,7 +1508,15 @@ def build_tool_handler(
                             tool=tool_call.tool_name,
                         )
             else:
+                capture_emit("tool.executing", {"arguments": reservation.arguments})
+                from opensquilla.observability.piggyback.identity_runtime import tool_enter
+
+                tool_enter()
                 raw_result = await registered.handler(**reservation.arguments)
+            from opensquilla.observability.piggyback.identity_runtime import tool_observation
+
+            tool_observation(raw_result)
+            capture_emit("tool.raw_result", {"result": raw_result})
             await run_budget_tracker.commit_tool_result(reservation, raw_result)
         except asyncio.CancelledError as exc:
             exception = exc
@@ -1551,6 +1569,9 @@ def build_tool_handler(
             finally:
                 current_execution_log.reset(log_token)
                 current_tool_context.reset(token)
+
+    _handler._trace_deferred_execution = True
+    _handler = trace_tool_handler(_handler, ctx)
 
     # Agent-side lossy projection is only safe when the callable can actually
     # dispatch the provider-visible recovery tool.  Keep this capability on

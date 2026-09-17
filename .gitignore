@@ -125,3 +125,9 @@ opensquilla-webui/public/music/playlist.local.json
 
 # Isolated local implementation worktrees.
 /.worktrees/
+
+# TracePoint local capture and generated verification artifacts
+/tracepoint-results/
+/trace-data/
+/trace-config.json
+/examples/tracepoint/*.local.json

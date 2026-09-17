@@ -18,6 +18,8 @@ from unittest.mock import Mock
 
 import structlog
 
+from opensquilla.observability.piggyback.capture import emit as capture_emit
+from opensquilla.observability.piggyback.capture import enabled as capture_enabled
 from opensquilla.paths import default_opensquilla_home
 
 SCHEMA_VERSION = 1
@@ -33,6 +35,8 @@ log = structlog.get_logger(__name__)
 def is_turn_call_log_enabled(diagnostics_state: Any | None = None) -> bool:
     """Return whether raw turn-call logging is explicitly enabled."""
 
+    if capture_enabled():
+        return True
     if os.environ.get(TURN_CALL_LOG_ENV, "").strip().lower() in TURN_CALL_LOG_ENABLED_VALUES:
         return True
     if diagnostics_state is None:
@@ -133,6 +137,21 @@ class TurnCallLogger:
         error must never break an agent turn.
         """
 
+        capture_emit(
+            "audit." + kind,
+            payload,
+            identity={
+                "turn_id": self.turn_id,
+                "session_id": self.session_id,
+                "agent_id": self.agent_id,
+            },
+        )
+        if (
+            capture_enabled()
+            and os.environ.get(TURN_CALL_LOG_ENV, "").strip().lower()
+            not in TURN_CALL_LOG_ENABLED_VALUES
+        ):
+            return None
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             day = datetime.now(UTC).strftime("%Y%m%d")

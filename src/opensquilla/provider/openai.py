@@ -24,6 +24,8 @@ import structlog
 from opensquilla.endpoint_identity import endpoint_replay_source
 from opensquilla.env import trust_env as _trust_env
 from opensquilla.execution_status import compact_provider_status, derive_is_error
+from opensquilla.observability.piggyback.http import post_llm, stream_llm
+from opensquilla.observability.piggyback.id_capture import provider_scope
 from opensquilla.safety.secret_redaction import redact_secret_text
 from opensquilla.secrets import clean_header_secret
 
@@ -3622,6 +3624,7 @@ class OpenAIProvider:
             protected_tool_result_indexes=protected_result_indexes,
         )
 
+    @provider_scope
     def chat(
         self,
         messages: list[Message],
@@ -3641,14 +3644,19 @@ class OpenAIProvider:
 
         cancelled = False
         event: StreamEvent | None = None
+        stream = self._stream(messages, tools, cfg)
         try:
-            async for event in self._stream(messages, tools, cfg):
-                yield event
+            try:
+                async for event in stream:
+                    yield event
+            finally:
+                await stream.aclose()
         except asyncio.CancelledError:
             # The inner stream owns request headers and HTTPX response state.
             # Drop its cancellation traceback and any last echoed event before
             # propagating a fresh cancellation from this metadata-only frame.
             event = None
+            stream = None
             cancelled = True
 
         if cancelled:
@@ -3995,11 +4003,12 @@ class OpenAIProvider:
                         proxy=self._proxy,
                     )
                 )
-                async with client.stream(
+                async with stream_llm(client,
                     "POST",
                     endpoint,
                     headers=headers,
                     json=payload,
+                    correlation=cfg.provider_request_correlation,
                 ) as response:
                     response_generation_id = _openrouter_generation_id_from_headers(
                         response.headers
@@ -5326,6 +5335,9 @@ class OpenAIProvider:
                 and not emitted_stream_event
                 and code != CONNECTION_FAILED_CODE
             ):
+                from opensquilla.observability.piggyback.id_capture import mark_retry
+
+                mark_retry()
                 event_name = (
                     "openrouter.stream_timeout_fallback_started"
                     if self._provider_kind == "openrouter"
@@ -5604,10 +5616,11 @@ class OpenAIProvider:
                         proxy=self._proxy,
                     )
                 )
-                response = await client.post(
+                response = await post_llm(client,
                     endpoint,
                     headers=fallback_headers,
                     json=fallback_payload,
+                    correlation=cfg.provider_request_correlation,
                 )
         except httpx.TimeoutException:
             # The earlier stream may have been accepted; keep compatibility retries finite.

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, Self
 
 from opensquilla.observability.log_privacy import log_metadata
+from opensquilla.observability.piggyback.capture import observe_trace
 from opensquilla.paths import default_opensquilla_home
 
 TRACE_SCHEMA_VERSION = 1
@@ -235,6 +236,7 @@ def load_trace_events(trace_id: str, log_dir: Path | None = None) -> list[TraceE
 def _append_trace_event(event: TraceEvent, log_dir: Path, *, allow_raw: bool) -> Path:
     if event.privacy == "raw" and not allow_raw:
         raise ValueError("raw trace event cannot be written through a safe sink")
+    observe_trace(event.to_dict())
     log_dir.mkdir(parents=True, exist_ok=True)
     day = datetime.now(UTC).strftime("%Y%m%d")
     path = log_dir / f"traces-{day}.jsonl"

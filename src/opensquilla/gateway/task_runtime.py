@@ -58,6 +58,7 @@ from opensquilla.gateway.terminal_activity import (
     terminal_activity_snapshot,
     usage_barrier_replay_proof,
 )
+from opensquilla.observability.piggyback.id_capture import freeze_dispatch, task_scope
 from opensquilla.safety.injection_guard import xml_escape
 from opensquilla.session.goals import (
     GOAL_OBJECTIVE_UPDATE_DETAIL_KEY,
@@ -803,6 +804,7 @@ class _RuntimeTask:
     input_mode: str = "user"
     persist_input: bool = False
     history_has_persisted_user: bool = True
+    trace_dispatch_scope: dict[str, Any] | None = None
     goal_context: dict[str, Any] | None = None
     goal_candidate: dict[str, Any] | None = None
     goal_steer_candidate: dict[str, Any] | None = None
@@ -1113,6 +1115,7 @@ class _SteerPendingInputProvider:
         texts.extend(user_texts)
         return PendingInputClaim(
             texts=tuple(texts),
+            trace_native_message_ids=tuple([None] if goal_update is not None else []) + tuple(item.persisted_user_message_id for item in self._claimed),
             goal_context=(
                 goal_update.context.as_task_detail()
                 if goal_update is not None
@@ -2268,6 +2271,7 @@ class TaskRuntime:
         overflow_policy: PendingOverflowPolicy | str | None = None,
         bypass_pending_limit: bool = False,
         _allow_during_shutdown: bool = False,
+        _trace_dispatch_scope: dict[str, Any] | None = None,
     ) -> TaskReservation:
         """Reserve queue admission without persistence, cancellation, or execution."""
 
@@ -2297,6 +2301,16 @@ class TaskRuntime:
                 ) from exc
 
         record_kwargs: dict[str, Any] = {}
+        trace_dispatch_scope = _trace_dispatch_scope
+        if run_kind == "subagent":
+            try:
+                if trace_dispatch_scope is None:
+                    trace_dispatch_scope = freeze_dispatch()
+                elif isinstance(trace_dispatch_scope, dict):
+                    # Recovery receives a durable JSON value, never a live RunIds object.
+                    trace_dispatch_scope = json.loads(json.dumps(trace_dispatch_scope))
+            except Exception:
+                pass  # Local instrumentation failure cannot reject queue admission.
         if task_id is not None:
             record_kwargs["task_id"] = task_id
         record = AgentTaskRecord(
@@ -2321,6 +2335,7 @@ class TaskRuntime:
                 "persisted_user_message_ids": normalized_message_ids,
                 "message_count": message_count,
                 "fresh_user_session": fresh_user_session,
+                "trace_dispatch_scope": trace_dispatch_scope,
             },
         )
         if isinstance(envelope.metadata.get("meta_control"), dict):
@@ -2356,6 +2371,7 @@ class TaskRuntime:
             input_mode=input_mode,
             persist_input=persist_input,
             history_has_persisted_user=history_has_persisted_user,
+            trace_dispatch_scope=trace_dispatch_scope,
             goal_context=(dict(goal_context) if goal_context is not None else None),
             goal_candidate=(dict(goal_candidate) if goal_candidate is not None else None),
             ingress_pipeline_steps=tuple(ingress_pipeline_steps or ()),
@@ -4361,6 +4377,7 @@ class TaskRuntime:
                         candidate.collected_primary_inputs.append(collected_identity)
             return handle, persisted
 
+    @task_scope
     async def _execute(self, task: _RuntimeTask) -> None:
         # Set before the first await so cancellation can distinguish a
         # never-started coroutine from one that owns runtime cleanup, even
@@ -5230,6 +5247,7 @@ class TaskRuntime:
                         fresh_user_session=False,
                         task_id=task.task_id,
                         update_envelope_cache=False,
+                        _trace_dispatch_scope=details.get("trace_dispatch_scope"),
                     )
                     await self._restore_durable_accepted_model_routing(
                         reservation,

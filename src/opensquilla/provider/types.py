@@ -776,6 +776,21 @@ class ProviderReplayState(BaseModel):
     # Ordered complete Anthropic blocks, including opaque continuation data.
     native_content: list[dict[str, Any]] | None = Field(default=None, repr=False)
 
+class MessageTraceIds(BaseModel):
+    """Durable provenance, separate from the provider's business projection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    message_id: str
+    source_call_ids: tuple[str, ...] = ()
+    adopted_child_call_ids: tuple[str, ...] = ()
+    input_turn_ids: tuple[str, ...] = ()
+    waited_call_ids: tuple[str, ...] = ()
+    unknown_call_ids: tuple[str, ...] = ()
+    unknown_message_ids: tuple[str, ...] = ()
+    execution_message_id: str | None = None
+    execution_signature: str | None = None
+    execution_source_ids: tuple[str, ...] = ()
+
 
 class Message(BaseModel):
     """A single conversation message."""
@@ -789,6 +804,19 @@ class Message(BaseModel):
     @property
     def execution_identity_span(self) -> tuple[int, int] | None:
         return self._execution_identity_span
+
+    trace_ids: MessageTraceIds | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler):
+        value = handler(self)
+        if self.trace_ids is None:
+            value.pop("trace_ids", None)
+        return value
+
+    def business_dump(self) -> dict:
+        """Use at generic provider adapters; model_dump remains lossless for storage."""
+        return self.model_dump(mode="json", exclude_none=True, exclude={"trace_ids"})
 
 
 # ---------------------------------------------------------------------------

@@ -129,6 +129,9 @@ class ToolResult:
     terminal_response_text: str | None = None
     execution_log_handle: str | None = None
 
+    # Explicit provenance envelope; None means unspecified, not an empty source set.
+    trace_ids: Any | None = None
+
 
 AgentToolHandler = Callable[[ToolCall], Awaitable[ToolResult]]
 

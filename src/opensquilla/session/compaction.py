@@ -2367,7 +2367,14 @@ async def call_compaction_llm(
             follow_redirects=False,
         ) as client:
             headers.update(tokenrhythm_install_id_headers(provider, url))
-            resp = await client.post(url, json=payload, headers=headers)
+            from opensquilla.observability.piggyback.http import post_llm
+
+            # The legacy string API has no message provenance DTO. The send seam
+            # records this auxiliary call and marks its unknown input lineage.
+            resp = await post_llm(
+                client, url, json=payload, headers=headers,
+                correlation=provider_request_correlation, auxiliary=True,
+            )
             resp.raise_for_status()
             data = resp.json()
             await usage.finalize_openai_response(

@@ -233,6 +233,7 @@ from opensquilla.observability.decision_log import (
 from opensquilla.observability.network_policy import (
     provider_request_correlation_disabled,
 )
+from opensquilla.observability.piggyback.capture import trace_run
 from opensquilla.observability.prompt_report import PromptReport, build_prompt_report
 from opensquilla.observability.trace import TraceContext, TraceEvent, write_trace_event
 from opensquilla.observability.turn_call_log import TurnCallLogger, is_turn_call_log_enabled
@@ -5702,6 +5703,7 @@ class TurnRunner:
                 **append_kwargs,
             )
 
+    @trace_run
     async def run(
         self,
         message: str,

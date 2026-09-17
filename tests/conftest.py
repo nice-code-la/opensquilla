@@ -83,6 +83,11 @@ def _xdist_runtime_roots(
 def pytest_configure(config: pytest.Config) -> None:
     """Move shared runtime directories below a worker-specific xdist scope."""
 
+    # TracePoint uploads are restricted to the TokenRhythm platform; tests use
+    # in-process and loopback mock platforms under these explicitly allowed hosts.
+    os.environ.setdefault(
+        "OPENSQUILLA_TRACE_EXTRA_PLATFORM_HOSTS", "platform.test,127.0.0.1,localhost"
+    )
     worker_input = getattr(config, "workerinput", None)
     if not isinstance(worker_input, dict):
         return

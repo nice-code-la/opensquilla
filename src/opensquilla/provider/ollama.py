@@ -10,6 +10,8 @@ import httpx
 import structlog
 
 from opensquilla.env import trust_env as _trust_env
+from opensquilla.observability.piggyback.http import stream_llm
+from opensquilla.observability.piggyback.id_capture import provider_scope
 from opensquilla.secrets import clean_header_secret
 
 from .candidate_artifact import (
@@ -285,6 +287,7 @@ class OllamaProvider:
             protected_tool_result_indexes=protected_result_indexes,
         )
 
+    @provider_scope
     def chat(
         self,
         messages: list[Message],
@@ -390,11 +393,12 @@ class OllamaProvider:
                 trust_env=_trust_env(),
                 proxy=self._proxy,
             ) as client:
-                async with client.stream(
+                async with stream_llm(client,
                     "POST",
                     endpoint,
                     json=payload,
                     headers=self._headers(),
+                    correlation=cfg.provider_request_correlation,
                 ) as response:
                     if response.status_code != 200:
                         body = await response.aread()

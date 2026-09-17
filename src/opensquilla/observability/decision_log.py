@@ -22,6 +22,7 @@ from typing import Literal
 
 from opensquilla.bootstrap_types import BootstrapFileReport
 from opensquilla.observability.log_privacy import log_metadata
+from opensquilla.observability.piggyback.capture import emit as capture_emit
 from opensquilla.paths import default_opensquilla_home
 
 SCHEMA_VERSION = 17
@@ -262,6 +263,7 @@ def write_decision_entry(
 ) -> Path:
     """Append ``entry`` as one JSON line; return the file path written to."""
 
+    capture_emit("decision.recorded", asdict(entry), identity={"turn_id": entry.turn_id})
     log_dir = log_dir or _default_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     day = datetime.now(UTC).strftime("%Y%m%d")

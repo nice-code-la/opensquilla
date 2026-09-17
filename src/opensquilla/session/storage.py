@@ -2222,6 +2222,9 @@ class SessionStorage:
             except BaseException:
                 await self._rollback_transaction(conn, operation)
                 raise
+            from opensquilla.observability.piggyback.identity_native import sync
+
+            await sync(conn)
         finally:
             if acquired:
                 self._operation_lock.release()
@@ -10252,6 +10255,9 @@ class SessionStorage:
         *,
         expected_epoch: int | None,
     ) -> None:
+        from opensquilla.observability.piggyback.identity_native import prepare
+
+        await prepare(conn, entry)
         data = entry.model_dump(exclude={"id"})
         cols = list(data.keys())
         placeholders = ", ".join("?" for _ in cols)
@@ -10355,6 +10361,10 @@ class SessionStorage:
         # Replacement is authoritative, including replay state. Keeping an old
         # envelope when the caller supplies None could revive an abandoned
         # generation; accepted-message callers supply their complete envelope.
+
+        from opensquilla.observability.piggyback.identity_native import prepare
+
+        await prepare(conn, entry)
         data = entry.model_dump(exclude={"id", "created_at"})
         assignments = [f"{column} = ?" for column in data]
         values = [_serialize(data[column]) for column in data]

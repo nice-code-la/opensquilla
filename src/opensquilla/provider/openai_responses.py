@@ -16,6 +16,8 @@ import httpx
 import structlog
 
 from opensquilla.env import trust_env as _trust_env
+from opensquilla.observability.piggyback.http import post_llm
+from opensquilla.observability.piggyback.id_capture import provider_scope
 from opensquilla.secrets import clean_header_secret
 
 from .candidate_artifact import (
@@ -320,6 +322,7 @@ class OpenAIResponsesProvider:
             message_limit=message_limit,
         )
 
+    @provider_scope
     def chat(
         self,
         messages: list[Message],
@@ -444,10 +447,11 @@ class OpenAIResponsesProvider:
                 trust_env=_trust_env(),
                 proxy=self._proxy,
             ) as client:
-                response = await client.post(
+                response = await post_llm(client,
                     endpoint,
                     headers=headers,
                     json=payload,
+                    correlation=config.provider_request_correlation,
                 )
         except httpx.TimeoutException as exc:
             code = CONNECTION_FAILED_CODE if is_connection_failure(exc) else "timeout"
@@ -1070,10 +1074,11 @@ class OpenAIResponsesProvider:
                 trust_env=_trust_env(),
                 proxy=self._proxy,
             ) as client:
-                response = await client.post(
+                response = await post_llm(client,
                     endpoint,
                     headers=headers,
                     json=payload,
+                    correlation=cfg.provider_request_correlation,
                 )
         except httpx.TimeoutException as exc:
             message = redact_upstream_error_text(

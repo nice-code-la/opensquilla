@@ -13,6 +13,8 @@ import structlog
 from opensquilla.endpoint_identity import endpoint_replay_source
 from opensquilla.env import trust_env as _trust_env
 from opensquilla.execution_status import derive_is_error
+from opensquilla.observability.piggyback.http import stream_llm
+from opensquilla.observability.piggyback.id_capture import provider_scope
 
 from .candidate_artifact import CandidateArtifactBuilder, CandidateArtifactLimitError
 from .error_redaction import redact_upstream_error_code, redact_upstream_error_text
@@ -499,6 +501,7 @@ class AnthropicProvider:
             protected_tool_result_indexes=protected_result_indexes,
         )
 
+    @provider_scope
     def chat(
         self,
         messages: list[Message],
@@ -662,11 +665,12 @@ class AnthropicProvider:
                 trust_env=_trust_env(),
                 proxy=self._proxy,
             ) as client:
-                async with client.stream(
+                async with stream_llm(client,
                     "POST",
                     endpoint,
                     headers=headers,
                     json=payload,
+                    correlation=cfg.provider_request_correlation,
                 ) as response:
                     if response.status_code != 200:
                         body = await response.aread()

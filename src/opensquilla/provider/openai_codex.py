@@ -25,6 +25,8 @@ import httpx
 import structlog
 
 from opensquilla.env import trust_env as _trust_env
+from opensquilla.observability.piggyback.http import stream_llm
+from opensquilla.observability.piggyback.id_capture import provider_scope
 
 from .candidate_artifact import CandidateArtifactBuilder, CandidateArtifactLimitError
 from .codex_auth import (
@@ -259,6 +261,7 @@ class OpenAICodexProvider:
             message_limit=message_limit,
         )
 
+    @provider_scope
     def chat(
         self,
         messages: list[Message],
@@ -362,11 +365,12 @@ class OpenAICodexProvider:
             ) as client:
                 refreshed = False
                 while True:
-                    async with client.stream(
+                    async with stream_llm(client,
                         "POST",
                         self._responses_url(),
                         headers=self._headers(credentials),
                         json=payload,
+                        correlation=cfg.provider_request_correlation,
                     ) as response:
                         if (
                             response.status_code == 401

@@ -27,6 +27,7 @@ class PendingInputClaim:
 
     texts: tuple[str, ...]
     goal_context: Mapping[str, Any] | None = None
+    trace_native_message_ids: tuple[str | None, ...] = ()
 
 
 @runtime_checkable

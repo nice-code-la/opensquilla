@@ -521,6 +521,9 @@ class ModelSelector:
         next_index = self._index + 1
         provider = _build_provider(self._chain[next_index])
         self._index = next_index
+        from opensquilla.observability.piggyback.identity_runtime import mark_fallback
+
+        mark_fallback()
         return provider
 
     def next_fallback_matching(
@@ -575,6 +578,9 @@ class ModelSelector:
         provider = _build_provider(chain[0])
         self._chain = [current, *chain]
         self._index = 1
+        from opensquilla.observability.piggyback.identity_runtime import mark_fallback
+
+        mark_fallback()
         return provider
 
     def next_fallback_after_failure(self, primary_failure: Exception) -> LLMProvider:

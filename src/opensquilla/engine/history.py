@@ -16,6 +16,7 @@ from opensquilla.execution_status import (
     normalize_execution_status,
     normalize_legacy_execution_status,
 )
+from opensquilla.observability.piggyback.id_capture import restore_history_ids
 from opensquilla.provider import (
     ContentBlockText,
     ContentBlockToolResult,
@@ -731,6 +732,7 @@ def _project_unsigned_silent_replay(
     return projected
 
 
+@restore_history_ids
 def reconstruct_messages_from_entry(
     role: str,
     content: Any,

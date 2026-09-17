@@ -30,6 +30,7 @@ from typing import Any, Literal
 
 import structlog
 
+from opensquilla.observability.piggyback.identity_runtime import context_message as _trace_context_message
 from opensquilla.artifacts import artifact_payload
 from opensquilla.attachment_workspace import (
     AttachmentWorkspaceMaterializer,
@@ -125,6 +126,19 @@ from opensquilla.execution_status import (
     runtime_execution_status,
 )
 from opensquilla.git_runtime import GitRunState, run_git
+from opensquilla.observability.piggyback.capture import trace_run
+from opensquilla.observability.piggyback.causality import (
+    attempt_end as trace_attempt_end,
+)
+from opensquilla.observability.piggyback.causality import (
+    attempt_start as trace_attempt_start,
+)
+from opensquilla.observability.piggyback.causality import (
+    iteration_start as trace_iteration_start,
+)
+from opensquilla.observability.piggyback.causality import (
+    state_commit as trace_state_commit,
+)
 from opensquilla.observability.turn_call_log import TurnCallLogger
 from opensquilla.persistence.meta_run_writer import replay_inputs_are_modified
 from opensquilla.provider import (
@@ -5912,6 +5926,7 @@ class Agent:
                 error=str(exc),
             )
 
+    @trace_run
     async def run_turn(
         self,
         message: str,
@@ -6313,6 +6328,7 @@ class Agent:
         # caches from messages[0].
         request_context_insert_index = len(turn_messages)
         runtime_context_insert_index = len(turn_messages)
+        trace_user_input_start_index = len(turn_messages)
         if extra_messages:
             turn_messages.extend(extra_messages)
         # Only append text message if non-empty (multimodal may use extra_messages instead)
@@ -6320,6 +6336,7 @@ class Agent:
             if not extra_messages:
                 runtime_context_insert_index = len(turn_messages)
             turn_messages.append(Message(role="user", content=message))
+        trace_state_commit(turn_messages[trace_user_input_start_index:], "user_input")
         self._write_context_stage("prompt:before", turn_messages)
         self._write_context_stage(
             "prompt:images",
@@ -6880,12 +6897,14 @@ class Agent:
             if not _continuation_request_fits(pending_message):
                 return False
             claim_pending = getattr(pending_input_provider, "claim_pending", None)
+            claimed_native_ids = ()
             if callable(claim_pending):
                 prepared_claim = claim_pending()
                 if inspect.isawaitable(prepared_claim):
                     prepared_claim = await prepared_claim
                 pending_inputs = list(getattr(prepared_claim, "texts", ()) or ())
                 claimed_goal_context = getattr(prepared_claim, "goal_context", None)
+                claimed_native_ids = getattr(prepared_claim, "trace_native_message_ids", ())
             else:
                 pending_inputs = pending_input_provider.drain_pending()
                 claimed_goal_context = None
@@ -6915,6 +6934,7 @@ class Agent:
                 # Drop it fail-closed if the Agent's own immutable task
                 # identity cannot adopt the validated durable context.
                 pending_inputs = pending_inputs[1:]
+                claimed_native_ids = claimed_native_ids[1:]
                 reject_goal_context = getattr(
                     pending_input_provider,
                     "reject_claimed_goal_context",
@@ -6931,6 +6951,10 @@ class Agent:
                 content=[ContentBlockText(text=pending_input) for pending_input in pending_inputs],
             )
             turn_messages.append(staged_pending_input_message)
+            from opensquilla.engine.agent_injection import ListPendingInputProvider
+            from opensquilla.observability.piggyback.identity_runtime import claimed_input
+
+            claimed_input(staged_pending_input_message, claimed_native_ids, goal=claimed_goal_context is not None and goal_context_accepted, local=type(pending_input_provider) is ListPendingInputProvider)
             pending_input_batch_staged = True
             install_turn.accept_user_input()
             return True
@@ -7128,6 +7152,7 @@ class Agent:
                     raise TimeoutError(f"Agent total timeout after {self.config.timeout}s")
 
                 iterations += 1
+                trace_iteration_start(iterations, turn_messages)
                 # The act-now message answers one reasoning-only failure; a
                 # fresh iteration starts from a clean request.
                 reasoning_only_act_now_message = None
@@ -7261,6 +7286,11 @@ class Agent:
                         # an assistant tail when it carries a reasoning prefill.
                         request_suffix_messages = [reasoning_only_act_now_message]
                         reasoning_only_act_now_for_call = reasoning_only_act_now_message
+                    # These suffixes are constructed by the framework above;
+                    # register their origin before provider sanitization adds
+                    # message metadata. They are not new user submissions.
+                    for directive in request_suffix_messages:
+                        _trace_context_message(directive)
                     request_turn_messages = [
                         *base_request_turn_messages,
                         *request_suffix_messages,
@@ -7788,6 +7818,7 @@ class Agent:
                             if provider_tools_for_call else None
                         ),
                     )
+                    trace_attempt_start(iterations, _call_attempt, call_id, request_messages)
                     self._write_turn_call_log(
                         "llm_request",
                         call_id=call_id,
@@ -9199,6 +9230,8 @@ class Agent:
                         self._write_turn_call_log("llm_error", **response_payload)
                     else:
                         self._write_turn_call_log("llm_response", **response_payload)
+
+                    trace_attempt_end(response_payload)
 
                     # -- after async for (retry loop level) --
                     if provider_error_for_log is not None and self._execution_context is not None:
@@ -11466,6 +11499,9 @@ class Agent:
                         )
                     )
 
+                if assistant_content:
+                    trace_state_commit(turn_messages[-1:], "assistant_accepted_into_loop")
+
                 # Detect incomplete tool calls (stream interrupted mid-generation)
                 if pending_tools and not tool_calls:
                     _log.warning(
@@ -12631,6 +12667,7 @@ class Agent:
                     break
 
                 # Completed results are already in the canonical user message.
+                trace_state_commit(turn_messages[-1:], "tool_results_committed")
                 if accepted_goal_terminal_status is not None:
                     if turn_yielded:
                         break
@@ -12691,6 +12728,7 @@ class Agent:
                 *turn_messages[:current_turn_start_index],
                 *project_incomplete_tool_history(turn_messages[current_turn_start_index:]),
             ]
+            trace_state_commit(self._history, "history_committed")
             self._write_context_stage("session:after", self._history)
 
         # ------ → DONE ------
@@ -14909,9 +14947,9 @@ class Agent:
         return "\n".join(lines)
 
     def _runtime_context_message(self, runtime_context: str) -> Message:
-        return with_execution_identity(
+        return _trace_context_message(with_execution_identity(
             Message(role="user", content=runtime_context), self._active_execution_identity(),
-        )
+        ))
 
     @staticmethod
     def _request_context_message(request_context: str | None) -> Message | None:
@@ -14923,7 +14961,7 @@ class Agent:
             "Use it only when it is relevant to the current user request.",
             request_context.strip(),
         ]
-        return Message(role="user", content="\n".join(lines))
+        return _trace_context_message(Message(role="user", content="\n".join(lines)))
 
 
     @staticmethod
@@ -14974,14 +15012,14 @@ class Agent:
         if isinstance(message.content, str):
             prefix = message.content + "\n\n"
             span = runtime_context_message.execution_identity_span
-            return with_execution_span(
+            return _trace_context_message(with_execution_span(
                 message,
                 (len(prefix) + span[0], len(prefix) + span[1]) if span is not None else None,
                 content=prefix + runtime_content,
-            )
+            ), message, runtime_context_message)
         if isinstance(message.content, list):
             span = runtime_context_message.execution_identity_span
-            return message.model_copy(
+            return _trace_context_message(message.model_copy(
                 update={"content": [
                     *message.content,
                     with_execution_span(
@@ -14989,7 +15027,7 @@ class Agent:
                         (span[0] + 2, span[1] + 2) if span is not None else None,
                     ),
                 ]},
-            )
+            ), message, runtime_context_message)
         return runtime_context_message
 
     @staticmethod
@@ -15010,7 +15048,7 @@ class Agent:
             "Use it only to decide whether to call skill_view for the current task.",
             prompt.strip(),
         ]
-        return Message(role="user", content="\n".join(lines))
+        return _trace_context_message(Message(role="user", content="\n".join(lines)))
 
     def _transition(self, to: AgentState) -> StateChangeEvent:
         ev = StateChangeEvent(from_state=self._state, to_state=to)

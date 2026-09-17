@@ -24,6 +24,7 @@ import structlog
 
 from opensquilla.contracts.turn_execution import AssistantMessageReservation
 from opensquilla.engine.steps.inject_time_prefix import stamp as _stamp_time_prefix
+from opensquilla.observability.piggyback.capture import trace_committed_message, trace_state_commit
 from opensquilla.paths import default_opensquilla_home, native_io_path
 from opensquilla.session.attachment_manifest import (
     AttachmentManifest,
@@ -1792,6 +1793,7 @@ class SessionManager:
             invalid_turn_ids=frozenset(invalid_turn_ids),
         )
 
+    @trace_state_commit("session.branch_committed")
     async def branch(
         self,
         parent_session_key: str,
@@ -2002,6 +2004,9 @@ class SessionManager:
             )
             parent_tokens = sum(e.token_count or 0 for e in parent_entries) + summary_tokens
             if max_fork_tokens is None or parent_tokens <= max_fork_tokens:
+                from opensquilla.observability.piggyback.identity_native import fork_checkpoint, fork_context
+
+                trace_fork = fork_checkpoint(parent, child, parent_entries)
                 material_references = (
                     _fork_material_references(parent_entries)
                     if fork_through_turn_id
@@ -2065,7 +2070,7 @@ class SessionManager:
                         assistant_replay=deepcopy(entry.assistant_replay),
                         turn_usage=entry.turn_usage,
                         turn_context=attach_fork_terminal_outcome_projection(
-                            entry.turn_context,
+                            fork_context(entry.turn_context, trace_fork),
                             outcome_resolution.projections.get(_entry_turn_id(entry) or ""),
                         ),
                         created_at=entry.created_at,
@@ -2207,6 +2212,9 @@ class SessionManager:
             target_session_id=child.session_id,
             target_session_key=new_session_key,
         )
+        from opensquilla.observability.piggyback.identity_native import fork_checkpoint, fork_context
+
+        trace_fork = fork_checkpoint(parent, child, prefix_entries)
         copied_entries = tuple(
             TranscriptEntry(
                 session_id=child.session_id,
@@ -2227,7 +2235,7 @@ class SessionManager:
                 assistant_replay=deepcopy(entry.assistant_replay),
                 turn_usage=entry.turn_usage,
                 turn_context=attach_fork_terminal_outcome_projection(
-                    entry.turn_context,
+                    fork_context(entry.turn_context, trace_fork),
                     outcome_resolution.projections.get(_entry_turn_id(entry) or ""),
                 ),
                 created_at=entry.created_at,
@@ -2404,6 +2412,16 @@ class SessionManager:
 
             turn_context = current_turn_context()
 
+        from opensquilla.observability.piggyback.id_capture import persist_trace_context
+
+        try:
+            turn_context = persist_trace_context(role, turn_context)
+        except Exception:
+            from opensquilla.observability.piggyback.capture import get_capture
+
+            if cap := get_capture():
+                cap.fail()
+
         entry = TranscriptEntry(
             session_id=node.session_id,
             session_key=session_key,
@@ -2441,6 +2459,7 @@ class SessionManager:
         byte_count = len(content.encode("utf-8")) if isinstance(content, str) else 0
         self._memory_sync_notify(byte_count)
 
+    @trace_committed_message
     async def append_message(
         self,
         session_key: str,
@@ -2744,6 +2763,7 @@ class SessionManager:
             ),
         )
 
+    @trace_state_commit("memory.checkpoint_committed")
     async def record_memory_checkpoint(
         self,
         session_key: str,
@@ -3626,6 +3646,7 @@ class SessionManager:
             )
         return result
 
+    @trace_state_commit("context.compaction_committed")
     async def persist_compaction_result(
         self,
         session_key: str,

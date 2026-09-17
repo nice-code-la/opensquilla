@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenSquilla Trace</title>
+<style>
+*{box-sizing:border-box}body{font:15px/1.55 system-ui;margin:0;background:#f5f6fa;color:#182132}
+header{padding:28px 36px;background:#182132;color:white}main{padding:24px 36px;max-width:1600px;margin:auto}
+h1,h2,h3,h4,p{margin:0 0 12px}h2{margin-top:28px}h3{font-size:18px}h4{font-size:15px}
+input,select{max-width:100%;padding:10px;border:1px solid #ccd3dd;border-radius:7px;margin:4px 10px 4px 0}
+table{border-collapse:collapse;width:100%;background:white;margin:12px 0;font-size:13px}th,td{padding:10px;text-align:left;border-bottom:1px solid #e3e6ef;vertical-align:top;overflow-wrap:anywhere}
+.scroll{overflow-x:auto}.ok{color:#087b51}.bad{color:#ae3b24}.muted{color:#65748a}.small{font-size:12px}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#eef1f6;max-height:60vh;overflow:auto;font-size:12px}
+details{background:white;border:1px solid #e3e6ef;border-radius:7px;margin:7px 0;padding:12px}summary{cursor:pointer;overflow-wrap:anywhere}
+.iteration{margin:16px 0 28px;border-left:4px solid #417ab6;padding:18px;background:#fff;border-radius:8px}
+.attempt{margin:14px 0;padding:14px;border:1px solid #dbe2eb;border-radius:8px}.round{margin:14px 0;padding:16px;background:#f5f7fc;border-radius:8px}
+.parallel{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:12px;margin:14px 0}
+.candidate{background:#fff;border:1px solid #dbe2eb;border-radius:8px;padding:14px;min-width:0;scroll-margin-top:20px}
+.pill{display:inline-block;border-radius:16px;padding:3px 10px;background:#e9effa;font-size:12px;margin:0 7px 8px 0;color:#274976}
+.aggregation{border-left:3px solid #7d69b8;margin:18px 0;padding:12px;background:white;min-width:0}
+a{color:#245e9d}code{font-size:12px;overflow-wrap:anywhere}.accepted{border-color:#16825e}.empty{padding:18px;background:white;border-radius:8px}
+@media(max-width:700px){header,main{padding:20px}.iteration,.attempt,.round{padding:10px}td,th{padding:7px}}
+</style>
+<header><h1>OpenSquilla Trace</h1><div>循环顺序 · 并行候选 · 聚合与重试 · 接收完整性</div></header>
+<main>
+<p id="revision" class="muted small"></p><div id="stats"></div>
+<h2>用户 Turn</h2><section id="user-turns"></section>
+<h2>通过 Call ID 定位</h2>
+<input id="call-id" list="call-choices" aria-label="Call ID" placeholder="输入完整 call_id 精确定位" style="width:420px">
+<datalist id="call-choices"></datalist><section id="call-location"></section>
+<div class="scroll"><table><thead><tr><th>运行</th><th>记录完整性</th><th>因果覆盖</th><th>环境等级</th><th>缺口</th></tr></thead><tbody id="runs"></tbody></table></div>
+<label for="run">运行范围 </label><select id="run"><option value="">全部运行</option></select>
+<h2>Agent loop 与模型协作</h2>
+<p class="muted">迭代和重试按框架记录的序号展开。Proposal 作为并列候选展示；聚合表中的位置是模型实际收到的候选顺序。展开物理请求可核对完整业务输入与响应。</p>
+<section id="loops"></section>
+<h2>原始事件</h2><input id="search" aria-label="筛选事件或内容" placeholder="筛选事件、身份或内容"><span id="count" class="muted"></span><section id="events"></section>
+</main>
+<script type="application/json" id="data">__TRACEPOINT_DATA__</script>
+<script>
+const b=JSON.parse(document.getElementById('data').textContent), el=id=>document.getElementById(id);
+const node=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n};
+const short=id=>id?String(id).slice(0,10):'缺失';
+const detail=(title,value)=>{const d=node('details');d.append(node('summary',title),node('pre',JSON.stringify(value,null,2)));return d};
+const table=(head,rows)=>{const box=node('div',undefined,'scroll'),t=node('table'),h=node('thead'),tr=node('tr'),body=node('tbody');head.forEach(v=>tr.append(node('th',v)));h.append(tr);rows.forEach(row=>{const r=node('tr');row.forEach(value=>{const td=node('td');td.append(value instanceof Node?value:document.createTextNode(String(value??'缺失')));r.append(td)});body.append(r)});t.append(h,body);box.append(t);return box};
+const calls=b.model_contexts||{}, rounds=b.ensemble_rounds||{}, iterations=b.loop_iterations||{};
+const allCandidates=Object.assign({},...Object.values(rounds).map(r=>r.candidates||{}));
+const roleName=role=>({proposer:'Proposal',aggregator:'Aggr',fixed_aggregator:'固定模型 Aggr',fixed:'固定模型'}[role]||role||'未知角色');
+el('revision').textContent='来源 '+(b.provenance||'unknown')+' · 重建版本 '+b.revision;
+for(const [label,value] of [['迭代',Object.keys(iterations).length],['Ensemble 轮次',Object.keys(rounds).length],['物理 LLM 请求',Object.keys(calls).length],['显式因果边',(b.causal_graph||[]).length]])el('stats').append(node('span',value+' '+label,'pill'));
+for(const [id,r] of Object.entries(b.runs)){
+  const tr=node('tr');[id,r.complete?'完整':'待补齐 / 不完整',r.causality_coverage||'legacy-unverified',r.environment_grade,r.reasons.join(', ')||'—'].forEach((v,i)=>tr.append(node('td',v,i===1?(r.complete?'ok':'bad'):undefined)));el('runs').append(tr);
+  const o=node('option',id);o.value=id;el('run').append(o);
+}
+const callIndex=b.call_index||{},userTurns=b.user_turns||{};
+el('user-turns').append(table(['user_turn_id','用户输入','运行 / 调用数','已接收记录'],Object.entries(userTurns).map(([id,t])=>[
+  id,typeof t.input?.input==='string'?t.input.input:JSON.stringify(t.input?.input??null),
+  t.run_ids.length+' / '+t.call_ids.length,t.complete?'完整':'等待尾部或缺失记录'
+])));
+for(const [id,c] of Object.entries(callIndex)){const o=node('option');o.value=id;o.label='turn '+short(c.location?.user_turn_id)+' / iteration '+(c.location?.iteration_index??'未知')+' / '+roleName(c.location?.role);el('call-choices').append(o)}
+function renderCallLocation(){
+  const id=el('call-id').value.trim(),root=el('call-location');root.replaceChildren();
+  if(!id){root.append(node('p','每个 call_id 对应一个物理请求。可定位用户 Turn、Agent 运行、迭代、候选及重试位置。','muted'));return}
+  const c=callIndex[id];
+  if(!c){root.append(node('p','当前已接收数据中没有这个 Call ID。','bad'));return}
+  const p=c.location;
+  root.append(node('p','位置状态：'+c.position_status+' · 因果关系：'+c.causality_status+' · 所属运行'+(c.run_complete?'记录完整':'尚未完整'),'small'));
+  if(p)root.append(table(['层级','ID / 位置'],[
+    ['Trace',p.trace_id],['User turn',p.user_turn_id],['Agent run',p.run_id],['Agent',p.agent_id],
+    ['Iteration',p.iteration_id+' / '+p.iteration_index],['外层尝试',p.outer_attempt_id+' / '+p.outer_attempt_index],
+    ['Ensemble 轮次',p.ensemble_round_id],['分支',roleName(p.role)+' / '+(p.candidate_id||p.aggregation_id||'—')],
+    ['成员尝试',p.member_attempt_id+' / '+p.member_attempt_index],['Call',id],['输入快照',c.input_context_id]
+  ]));
+  root.append(detail('直接前驱和后继 Call ID',{
+    predecessor_call_ids:c.predecessor_call_ids,successor_call_ids:c.successor_call_ids,
+    missing_causal_event_ids:c.missing_causal_event_ids
+  }),detail('完整调用位置',c),detail('实际业务请求与响应',calls[id]));
+}
+function selectCallFromHash(){if(location.hash.startsWith('#call=')){try{el('call-id').value=decodeURIComponent(location.hash.slice(6))}catch{return}renderCallLocation();el('call-id').scrollIntoView()}}
+el('call-id').addEventListener('input',renderCallLocation);window.addEventListener('hashchange',selectCallFromHash);renderCallLocation();selectCallFromHash();
+function physical(ids){
+  const box=node('div');
+  for(const id of ids||[]){const c=calls[id],d=detail('LLM '+short(id)+' · '+(c?.request?.model||'未知模型')+' · '+(c?.outcome?.status||'未闭合'),c||{missing_call:id});const a=node('a','按 Call ID 定位');a.href='#call='+id;d.append(a);box.append(d)}
+  if(!ids?.length)box.append(node('p','无物理请求记录','muted small'));
+  return box;
+}
+function memberDetails(members,accepted){
+  const box=node('div');
+  [...members].sort((a,c)=>Number(a.identity.member_attempt_index)-Number(c.identity.member_attempt_index)).forEach(m=>{
+    const id=m.identity.member_attempt_id,d=node('details');
+    d.append(node('summary','尝试 '+m.identity.member_attempt_index+' · '+short(id)+' · '+(m.end.status||'未闭合')+(id===accepted?' · 已采用':'')),physical(m.physical_call_ids),detail('成员身份与闭合证据',m));box.append(d);
+  });return box;
+}
+function renderRound(id,r){
+  const box=node('div',undefined,'round');box.id='round-'+id;
+  box.append(node('h4','Ensemble '+short(id)+' · '+(r.end.status||'未闭合')),
+    node('p','最终输出：'+roleName(r.end.final_role)+' · 成员尝试 '+short(r.end.accepted_member_attempt_id),'small'));
+  const members=Object.values(r.members||{}),plans=r.scheduled_candidates||[];
+  if(plans.length){
+    box.append(node('p','并行 Proposal · 横向排列不表示执行先后','muted small'));
+    const parallel=node('div',undefined,'parallel');
+    [...plans].sort((a,c)=>a.index-c.index).forEach(p=>{
+      const c=r.candidates[p.candidate_id],card=node('div',undefined,'candidate');card.id='candidate-'+p.candidate_id;
+      card.append(node('h4',p.model+' · sample '+p.sample_index),node('code','candidate '+short(p.candidate_id)),
+        node('p',c?(c.payload.ok?'候选成功':'候选失败 / 取消'):'候选结果未收到',c?.payload.ok?'ok':'bad'),
+        memberDetails(members.filter(m=>m.identity.candidate_id===p.candidate_id),c?.payload.accepted_member_attempt_id));
+      if(c)card.append(detail('候选正文与来源',c.payload));parallel.append(card);
+    });box.append(parallel);
+  }else box.append(node('p','本轮未派发 Proposal；已有候选的来源见下方引用。','muted small'));
+  for(const selection of r.selections||[]){
+    const s=selection.payload,selectionId=selection.context.aggregation_id;
+    const selectedMembers=members.filter(m=>m.identity.aggregation_id===selectionId);
+    const adopted=selectedMembers.some(m=>m.identity.member_attempt_id===r.end.accepted_member_attempt_id);
+    const aggr=node('div',undefined,'aggregation'+(adopted?' accepted':''));
+    aggr.append(node('h4',roleName(s.role)+' · '+short(selectionId)+(adopted?' · 本轮采用':'')));
+    if(s.fallback_from_attempt_id)aggr.append(node('p','回退来源：成员尝试 '+short(s.fallback_from_attempt_id),'small'));
+    aggr.append(table(['输入位置','候选来源','采用的 Proposal 尝试','投影正文哈希'],(s.input_candidates||[]).map(c=>{
+      const a=node('a',short(c.candidate_id)+(allCandidates[c.candidate_id]?'':'（未收到）'));a.href='#candidate-'+c.candidate_id;
+      return [c.position,a,short(c.accepted_member_attempt_id),short(c.projected_content_ref)];
+    })),memberDetails(selectedMembers,r.end.accepted_member_attempt_id),detail('选择记录与聚合消息',s));box.append(aggr);
+  }
+  box.append(detail('轮次清单与来源身份',r));return box;
+}
+function renderLoops(){
+  const run=el('run').value,root=el('loops');root.replaceChildren();const seen=new Set();
+  const entries=Object.entries(iterations).filter(([,i])=>!run||i.run_id===run).sort(([,a],[,c])=>String(a.run_id).localeCompare(String(c.run_id))||a.index-c.index);
+  for(const [id,i] of entries){
+    const box=node('article',undefined,'iteration');box.append(node('h3','Iteration '+i.index+' · '+short(id)),node('p','run '+short(i.run_id)+' · '+(i.end.status||'未闭合'),'muted small'));
+    if(i.start.previous_iteration_end)box.append(node('p','承接前次迭代结束事件 '+short(i.start.previous_iteration_end),'small'));
+    for(const a of i.attempts){
+      const attempt=node('div',undefined,'attempt');attempt.append(node('h4','外层尝试 '+a.identity.outer_attempt_index+' · call '+a.identity.agent_call_id),node('p','logical '+short(a.identity.logical_call_id)+' · attempt '+short(a.identity.outer_attempt_id),'small'));
+      const owned=Object.entries(rounds).filter(([,r])=>r.identity.outer_attempt_id===a.identity.outer_attempt_id);
+      for(const [rid,r] of owned){seen.add(rid);attempt.append(renderRound(rid,r))}
+      if(!owned.length)attempt.append(physical(a.physical_call_ids));attempt.append(detail('调用输入与外层响应',a));box.append(attempt);
+    }
+    for(const c of i.state_commits)box.append(detail('状态提交 · '+c.payload.phase+' · '+short(c.event_id),c.payload));root.append(box);
+  }
+  for(const [id,r] of Object.entries(rounds))if(!seen.has(id)&&(!run||r.identity.run_id===run))root.append(renderRound(id,r));
+  if(!root.children.length)root.append(node('p','当前范围没有显式 loop / ensemble 记录。历史数据保持原有事件视图，不推测迭代或候选关系。','muted empty'));
+}
+function renderEvents(){const query=el('search').value.toLowerCase(),run=el('run').value;el('events').replaceChildren();let count=0;for(const e of b.events){const text=JSON.stringify(e);if((run&&e.context.run_id!==run)||(query&&!text.toLowerCase().includes(query)))continue;count++;el('events').append(detail(e.kind+' · run '+short(e.context.run_id)+' · producer '+short(e.producer_id)+' #'+e.seq,e))}el('count').textContent=count+' 个事件'}
+el('search').addEventListener('input',renderEvents);el('run').addEventListener('change',()=>{renderLoops();renderEvents()});renderLoops();renderEvents();
+</script>
+</html>

@@ -37,6 +37,7 @@ import structlog
 from opensquilla.engine.hooks.types import CompactionState
 from opensquilla.engine.route_plan import route_plan_snapshot
 from opensquilla.observability.decision_log import build_vision_followup_gate_reason_code
+from opensquilla.observability.piggyback.capture import emit as capture_emit
 from opensquilla.session.compaction_lifecycle import CompactionTimeoutError
 from opensquilla.silent_reply import (
     SILENT_REPLY_NOT_ALLOWED_CODE,
@@ -1661,6 +1662,7 @@ class _CompactionHandler:
         )
 
     async def _fire_before_compact(self, state: CompactionState) -> None:
+        capture_emit("context.compaction_started", {"state": state})
         for hook in self._compaction_hooks:
             try:
                 await hook.before_compact(state)
@@ -1672,6 +1674,7 @@ class _CompactionHandler:
         state: CompactionState,
         outcome: dict[str, Any],
     ) -> None:
+        capture_emit("context.compaction_finished", {"state": state, "outcome": outcome})
         for hook in self._compaction_hooks:
             try:
                 await hook.after_compact(state, outcome)

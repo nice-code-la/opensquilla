@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from opensquilla.agents.limits import MAX_SPAWN_DEPTH
 from opensquilla.engine.types import done_text_snapshot
+from opensquilla.observability.piggyback.capture import child_task_context
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -730,7 +731,13 @@ class SubagentManager:
                     # context instead of deferring async-generator cleanup to
                     # an unrelated event-loop finalizer task.
                     await close()
-            return terminal_text if terminal_text_present else "".join(collected)
+            result = terminal_text if terminal_text_present else "".join(collected)
+            try:
+                from opensquilla.observability.piggyback.id_capture import child_result
+
+                return child_result(result, run_id)
+            except Exception:
+                return result
 
         async def _run_with_timeout() -> str:
             if spec.timeout <= 0:
@@ -740,8 +747,13 @@ class SubagentManager:
             except TimeoutError:
                 raise TimeoutError(f"Subagent timed out after {spec.timeout}s")
 
-        task: asyncio.Task[str] = asyncio.create_task(
-            _run_with_timeout(), name=f"subagent-{run_id}"
+        from opensquilla.observability.piggyback.capture import get_capture
+        from opensquilla.observability.piggyback.id_capture import ObservedChildTask
+
+        task_factory = ObservedChildTask if get_capture() else asyncio.create_task
+        task: asyncio.Task[str] = task_factory(
+            _run_with_timeout(), name=f"subagent-{run_id}",
+            context=child_task_context(run_id, spec.task)
         )
         handle = SubagentHandle(
             run_id=run_id,
@@ -751,6 +763,12 @@ class SubagentManager:
         )
 
         def _on_done(t: asyncio.Task[str]) -> None:
+            if t.cancelled() or t.exception() is not None:
+                from opensquilla.observability.piggyback.capture import get_capture
+                from opensquilla.observability.piggyback.identity_runtime import dispatch_cancel
+
+                if capture := get_capture():
+                    dispatch_cancel(capture.identities.id("dispatch", run_id))
             handle.completed_at = time.monotonic()
             if terminal_usage:
                 handle.usage = terminal_usage[-1]
@@ -783,7 +801,19 @@ class SubagentManager:
         tasks = [h.task for h in self.registry.all_handles() if h.status == "running"]
         if not tasks:
             return
-        await asyncio.wait(tasks, timeout=timeout)
+        completed, _ = await asyncio.wait(tasks, timeout=timeout)
+        # A barrier observes completion; it does not declare result adoption.
+        try:
+            from opensquilla.observability.piggyback.id_capture import note_waited_result
+
+            for task in completed:
+                if not task.cancelled() and task.exception() is None:
+                    note_waited_result(task.result())
+        except Exception:
+            from opensquilla.observability.piggyback.capture import get_capture
+
+            if capture := get_capture():
+                capture.fail()
 
     async def abort_all(self) -> int:
         """Cancel all running subagents. Returns count of aborted tasks."""
